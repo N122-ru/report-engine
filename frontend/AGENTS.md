@@ -19,6 +19,7 @@ Own the React and TypeScript single-page application, its browser-side services,
 - Keep `report-engine-profile` JSON serialization versioned and validate profile imports before adding templates or changing requisites.
 - Profile imports must retain the existing session `meta_revision` conflict path and must not silently overwrite remote metadata.
 - Treat PDF availability as a server-reported optional capability and keep DOCX export available when it is absent.
+- A4 preview pagination is owned by `src/services/previewPagination.ts`: estimate wrapped table cells at equal fixed column widths, include headers/captions/padding, and reserve 10 px below the 700 px body budget. Split prose by estimated 21 px lines while retaining inline formatting; indent only the original paragraph start. Preserve heading keep-with-next and explicit page breaks. Preview pagination remains approximate; DOCX/PDF determines final layout.
 
 ## Work Guidance
 

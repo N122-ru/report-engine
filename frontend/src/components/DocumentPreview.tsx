@@ -3,7 +3,8 @@ import katex from 'katex';
 import { ReportMetadata } from '../types';
 import { normalizeLogoMode } from '../services/profiles';
 import { formatReference } from '../services/bibliography';
-import { extractMarkdownImageSources, parseReportInline } from '../services/markdown';
+import { extractMarkdownImageSources, parseReportInline, type InlinePart } from '../services/markdown';
+import { createPreviewParagraph, estimateTableHeight, paginatePreviewBlocks, splitPreviewTableRow, type ParsedBlock } from '../services/previewPagination';
 import { 
   CheckCircle, XCircle, ShieldCheck, Eye, Wand2,
   ZoomIn, ZoomOut, Maximize2, SlidersHorizontal, ChevronDown
@@ -23,13 +24,6 @@ interface DocumentPreviewProps {
   onHideCaptionsChange?: (val: boolean) => void;
   latexMode?: 'omml' | 'unicode';
   onLatexModeChange?: (mode: 'omml' | 'unicode') => void;
-}
-
-interface ParsedBlock {
-  id: string;
-  type: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6' | 'p' | 'list' | 'image' | 'table' | 'code' | 'math' | 'bibhead' | 'bibref';
-  data: any;
-  estHeight: number;
 }
 
 // Normalize names to initials followed by surname, matching title_page.py.
@@ -220,7 +214,11 @@ function renderMathFormula(
 // Inline code shares the body's Times New Roman font by project policy.
 function renderFormattedText(text: string, latexMode: 'omml' | 'unicode' = 'omml'): React.ReactNode {
   if (!text) return null;
-  return <>{parseReportInline(text).map((part, index) => {
+  return renderInlineParts(parseReportInline(text), latexMode);
+}
+
+function renderInlineParts(parts: InlinePart[], latexMode: 'omml' | 'unicode'): React.ReactNode {
+  return <>{parts.map((part, index) => {
     let node: React.ReactNode = part.kind === 'math'
       ? <span className="inline-block mx-0.5">{renderMathFormula(part.text, latexMode, false)}</span>
       : part.text;
@@ -955,12 +953,12 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
         const emitPara = (text: string) => {
           const t = text.trim();
           if (!t) return;
-          const linesEst = Math.max(1, Math.ceil(t.length / 68));
+          const data = createPreviewParagraph(t);
           blocks.push({
             id: `p-${blocks.length}`,
             type: 'p',
-            data: { text: t },
-            estHeight: linesEst * 21
+            data,
+            estHeight: data.linesEst * 21
           });
         };
         // A standalone image needs no text segmentation.
@@ -1023,7 +1021,7 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
         }
         const tblNum = assignCaptionNumber(usedTblNums, tblAuto, explicitTbl);
         const caption = `Таблица\u00A0${tblNum} — ${tableTitle}`;
-        const estHeight = 32 + dataRows.length * 26;
+        const estHeight = estimateTableHeight(dataRows, caption, meta.hide_captions);
         blocks.push({
           id: `tbl-${blocks.length}`,
           type: 'table',
@@ -1110,15 +1108,12 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
         i++;
       }
       const text = paraLines.join(' ');
-      const charCount = text.length;
-      // Estimate ~68 characters per line at 14 pt within a 467 px text area.
-      const linesEst = Math.max(1, Math.ceil(charCount / 68));
-      // Use 21 px line height for 1.5 spacing, without extra paragraph gaps.
-      const estHeight = linesEst * 21;
+      const data = createPreviewParagraph(text);
+      const estHeight = data.linesEst * 21;
       blocks.push({
         id: `p-${blocks.length}`,
         type: 'p',
-        data: { text },
+        data,
         estHeight
       });
     }
@@ -1143,104 +1138,9 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
   }, [meta.references, content]);
 
   // Approximate the DOCX layout by distributing blocks across A4 pages.
-  const parsedPages = useMemo(() => {
-    // Estimate A4 body height with 20 mm (57 px) margins and a ~25 px footer.
-    // 842px - 57px - 57px - 25px = 703px
-    const MAX_PAGE_CONTENT_HEIGHT = 700;
-    const pages: ParsedBlock[][] = [[]];
-    let currentHeight = 0;
-
-    const allBlocks = [...parsedBlocks, ...bibBlocks];
-    if (allBlocks.length === 0) return [];
-    allBlocks.forEach((block, idx) => {
-      if (block.type === 'image' && block.data.layout?.page_break_before && pages[pages.length - 1].length > 0) {
-        pages.push([]);
-        currentHeight = 0;
-      }
-      // Start H1 sections on new pages when enabled.
-      if (pageBreakBeforeH1 && block.type === 'h1' && pages[pages.length - 1].length > 0) {
-        pages.push([block]);
-        currentHeight = block.estHeight;
-        return;
-      }
-
-      // Keep H1/H2/H3 and bibliography headings with at least one following
-      // paragraph when checking available page space.
-       const isHeading = block.type.startsWith('h') || block.type === 'bibhead';
-      const nextBlock = allBlocks[idx + 1];
-      const nextNeededHeight = nextBlock ? Math.min(nextBlock.estHeight, 50) : 30;
-
-      if (isHeading && (currentHeight + block.estHeight + nextNeededHeight > MAX_PAGE_CONTENT_HEIGHT) && pages[pages.length - 1].length > 0) {
-        pages.push([block]);
-        currentHeight = block.estHeight;
-        return;
-      }
-
-      // Always start bibliography headings on a new page, matching DOCX pageBreakBefore.
-      if (block.type === 'bibhead' && pages[pages.length - 1].length > 0) {
-        pages.push([block]);
-        currentHeight = block.estHeight;
-        return;
-      }
-
-      // Split lists between items when they exceed the remaining page space.
-      if (block.type === 'list') {
-        const items = block.data.items || [];
-        const startNum = Math.max(1, block.data.start || 1);
-        let curChunk: any[] = [];
-        let curChunkStart = startNum;
-
-        items.forEach((it: any, itemIdx: number) => {
-          const itH = it.estHeight || 21;
-          const isPageEmpty = pages[pages.length - 1].length === 0 && curChunk.length === 0;
-
-          if (!isPageEmpty && (currentHeight + itH > MAX_PAGE_CONTENT_HEIGHT)) {
-            // Flush accumulated list items onto the current page.
-            if (curChunk.length > 0) {
-              const chunkH = curChunk.reduce((sum: number, x: any) => sum + (x.estHeight || 21), 0);
-              pages[pages.length - 1].push({
-                id: `${block.id}-p${pages.length}-${curChunkStart}`,
-                type: 'list',
-                data: { items: curChunk, start: curChunkStart },
-                estHeight: chunkH
-              });
-              curChunk = [];
-            }
-            // Continue on a new page.
-            pages.push([]);
-            currentHeight = 0;
-            curChunkStart = startNum + itemIdx;
-          }
-
-          curChunk.push(it);
-          currentHeight += itH;
-        });
-
-        // Flush the final list fragment.
-        if (curChunk.length > 0) {
-          const chunkH = curChunk.reduce((sum: number, x: any) => sum + (x.estHeight || 21), 0);
-          pages[pages.length - 1].push({
-            id: `${block.id}-p${pages.length}-${curChunkStart}`,
-            type: 'list',
-            data: { items: curChunk, start: curChunkStart },
-            estHeight: chunkH
-          });
-        }
-        return;
-      }
-
-      // Move other blocks to the next page when they exceed available height.
-      if (currentHeight + block.estHeight > MAX_PAGE_CONTENT_HEIGHT && pages[pages.length - 1].length > 0) {
-        pages.push([]);
-        currentHeight = 0;
-      }
-
-      pages[pages.length - 1].push(block);
-      currentHeight += block.estHeight;
-    });
-
-    return pages;
-  }, [parsedBlocks, bibBlocks, pageBreakBeforeH1]);
+  const parsedPages = useMemo(() => paginatePreviewBlocks(
+    [...parsedBlocks, ...bibBlocks], pageBreakBeforeH1
+  ), [parsedBlocks, bibBlocks, pageBreakBeforeH1]);
 
   // Compute dynamic title-page spacing to mirror title_page.py.
   const titleGaps = useMemo(() => {
@@ -1854,21 +1754,17 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
                                 {block.data.caption}
                               </div>
                             )}
-                            <table className="w-full text-left border-collapse border border-black text-[11px] leading-snug">
+                            <table className="w-full table-fixed text-left border-collapse border border-black text-[11px] leading-snug">
                               <tbody>
                                 {block.data.dataRows.map((row: string, rI: number) => {
-                                  const cells = row
-                                    .replace(/\\\|/g, '__ESCAPED_PIPE__')
-                                    .split('|')
-                                    .map(c => c.replace(/__ESCAPED_PIPE__/g, '|'))
-                                    .filter((_, cI, arr) => cI > 0 && cI < arr.length - 1);
+                                  const cells = splitPreviewTableRow(row);
                                   const isHeader = rI === 0;
                                   return (
                                     <tr key={rI} className={isHeader ? 'bg-white font-bold' : ''}>
                                       {cells.map((c: string, cI: number) => (
                                         <td
                                           key={cI}
-                                          className={`p-1.5 border border-black ${
+                                          className={`p-1.5 border border-black [overflow-wrap:anywhere] ${
                                             isHeader ? 'text-center font-bold' : 'text-left'
                                           }`}
                                         >
@@ -1943,19 +1839,17 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
 
                       // GOST 7.32 prose: Times New Roman 14 pt, 1.5 spacing,
                       // justified alignment, and a 1.25 cm first-line indent.
-                      const pText = block.data.text || '';
-                      const isExplication = /^\s*где\b/i.test(pText);
-                      const isStandaloneCode = /^\s*`[^`]+`\s*$/.test(pText);
+                      const isStandaloneCode = block.data.isStandaloneCode;
 
                       return (
                         <p 
                           key={block.id} 
-                          className={`leading-[1.5] m-0 p-0 ${
+                          className={`leading-[1.5] m-0 p-0 [overflow-wrap:anywhere] ${
                             isStandaloneCode ? 'text-center' : 'text-justify'
                           }`}
-                          style={{ textIndent: (isExplication || isStandaloneCode) ? '0px' : '35.4px' }}
+                          style={{ textIndent: (block.data.noIndent || block.data.continuation) ? '0px' : '35.4px' }}
                         >
-                          {renderFormattedText(pText, latexMode)}
+                          {renderInlineParts(block.data.parts, latexMode)}
                         </p>
                       );
                     })}

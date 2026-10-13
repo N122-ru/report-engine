@@ -1,3 +1,13 @@
+FROM node:22-slim AS frontend
+
+WORKDIR /app
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+COPY frontend/ ./
+RUN npm run build
+
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -47,7 +57,7 @@ COPY backend/ ./backend/
 COPY assets/ ./assets/
 
 # Копирование готовой статической сборки фронтенда (React SPA)
-COPY frontend/dist ./frontend/dist
+COPY --from=frontend /app/dist ./frontend/dist
 
 # Порт сервиса
 EXPOSE 8000

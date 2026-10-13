@@ -8,6 +8,7 @@ Own quality and native release workflows for the integrated repository.
 
 - `workflows/ci.yml` runs repository quality gates.
 - `workflows/standalone-packages.yml` builds and publishes versioned packages for both products and supported native runners.
+- `workflows/docker.yml` builds, smoke-tests, archives, and attaches the versioned Docker image for tagged releases.
 - Root `requirements-dev.txt` declares the shared Python test dependencies installed by both workflows.
 
 ## Local Contracts
@@ -15,6 +16,7 @@ Own quality and native release workflows for the integrated repository.
 - Release artifacts are versioned `headless` and `web` packages for Ubuntu 22.04 and Windows x64.
 - Workflows must not store credentials, office suites, or fonts in the repository.
 - PDF is a runtime capability, not a bundled release feature; release notes must state the manual DOCX fallback.
+- The Docker workflow does not publish to a container registry; its tarball is uploaded as a workflow artifact and attached only for matching tag-triggered releases.
 - Both workflows install root `requirements-dev.txt` before pytest. Test tooling must stay separate from runtime and PyInstaller requirements.
 - Every release job installs both product requirement files: the full regression suite needs the HTTP test client, and the packaging resource inventory needs the pinned JSON Schema dependencies from the headless set even for web.
 

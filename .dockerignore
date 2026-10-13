@@ -1,0 +1,39 @@
+# Git
+.git
+.gitignore
+.dockerignore
+
+# Virtual environments & Python cache
+backend/venv/
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+backend/.pytest_cache/
+
+# Node & Frontend build
+frontend/node_modules/
+frontend/dist-ssr/
+frontend/.vite/
+
+# Output and temp files
+*.docx
+*.pdf
+test_output*
+test_verify/
+*.log
+
+# Editor & OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Reference/temp images
+ref_*
+image_*

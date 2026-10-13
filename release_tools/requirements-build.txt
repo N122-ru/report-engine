@@ -1,0 +1,2 @@
+# Native release tooling. Runtime dependencies remain in the product requirement files.
+pyinstaller==6.22.3

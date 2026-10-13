@@ -1,0 +1,43 @@
+# Dependencies & Virtualenvs
+node_modules/
+frontend/node_modules/
+backend/venv/
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+backend/.pytest_cache/
+
+# Production build
+frontend/dist/
+frontend/dist-ssr/
+frontend/.vite/
+release/
+
+# Generated files & outputs
+*.docx
+*.pdf
+test_output*
+test_verify/
+
+# Reference & temporary images
+ref_*
+image_*
+
+# Environment and IDE
+.env
+.env.*
+*.local
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
+*.log
+logs/
+backend/data/
+tasks/

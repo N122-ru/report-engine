@@ -1,0 +1,106 @@
+name: Build standalone release packages
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - product: headless
+            os: ubuntu-22.04
+            artifact_os: linux-x64
+          - product: headless
+            os: windows-2022
+            artifact_os: windows-x64
+          - product: web
+            os: ubuntu-22.04
+            artifact_os: linux-x64
+          - product: web
+            os: windows-2022
+            artifact_os: windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements.txt -r backend/requirements-headless.txt -r release_tools/requirements-build.txt -r requirements-dev.txt
+
+      - name: Run regression tests
+        run: python -m pytest -v
+
+      - name: Verify tag matches VERSION
+        shell: bash
+        run: test "${GITHUB_REF_NAME#v}" = "$(tr -d '\r\n' < VERSION)" || { echo "Tag and VERSION do not match"; exit 1; }
+
+      - name: Build package
+        run: python release_tools/build_release.py --product ${{ matrix.product }} --output-dir release
+
+      - name: Smoke-test packaged executable
+        shell: bash
+        run: |
+          PACKAGE="release/report-engine-${{ matrix.product }}-v${GITHUB_REF_NAME#v}-${{ matrix.artifact_os }}"
+          if [ "${{ matrix.product }}" = "headless" ]; then
+            if [ "${{ runner.os }}" = "Windows" ]; then "$PACKAGE/report-engine-headless.exe" --help; else "$PACKAGE/report-engine-headless" --help; fi
+          else
+            if [ "${{ runner.os }}" = "Windows" ]; then "$PACKAGE/report-engine-web.exe" --help; else "$PACKAGE/report-engine-web" --help; fi
+          fi
+
+      - name: Create ZIP archive
+        shell: bash
+        run: |
+          PACKAGE="release/report-engine-${{ matrix.product }}-v${GITHUB_REF_NAME#v}-${{ matrix.artifact_os }}"
+          python -c "from pathlib import Path; import shutil; p=Path('$PACKAGE'); shutil.make_archive(str(p), 'zip', root_dir=p.parent, base_dir=p.name)"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-engine-${{ matrix.product }}-${{ github.ref_name }}-${{ matrix.artifact_os }}
+          path: release/report-engine-${{ matrix.product }}-${{ github.ref_name }}-${{ matrix.artifact_os }}.zip
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download package archives
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*.zip

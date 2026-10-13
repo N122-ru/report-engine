@@ -1,0 +1,7 @@
+# The official MCP SDK owns protocol handling; the remaining packages are existing report-engine dependencies.
+mcp==2.3.0
+python-docx>=1.1.0
+lxml>=5.2.0
+markdown-it-py>=3.0.0
+latex2mathml>=3.81.0
+mathml2omml>=0.0.2

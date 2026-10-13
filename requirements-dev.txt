@@ -1,0 +1,4 @@
+# CI and developer test dependencies only: pytest and the HTTP client for API tests.
+# Runtime packages never include this file; install product requirements separately.
+pytest==9.1.1
+httpx2==2.13.1

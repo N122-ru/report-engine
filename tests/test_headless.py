@@ -331,6 +331,7 @@ def test_upload_image_reads_file_path(report, tmp_path, monkeypatch, path_kind):
     path.write_bytes(sample)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     file_path = {"absolute": str(path), "relative": "source.png", "home": "~/source.png"}[path_kind]
     result, payload = call_tool(report, "upload_image", {
         "filename": "Снимок экрана.png", "file_path": file_path,

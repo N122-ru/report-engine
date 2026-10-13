@@ -139,7 +139,7 @@ async def generate_report(
         if img.filename:
             content_bytes = await img.read(MAX_IMAGE_SIZE + 1)
             if len(content_bytes) > MAX_IMAGE_SIZE:
-                raise HTTPException(status_code=413, detail=f"Размер файла «{img.filename}» превышает лимит 25 МБ")
+                raise HTTPException(status_code=413, detail=f"Размер файла «{img.filename}» превышает лимит {MAX_IMAGE_SIZE // (1024 * 1024)} МБ")
             images_dict[img.filename] = content_bytes
             basename = os.path.basename(img.filename)
             images_dict[basename] = content_bytes
@@ -198,7 +198,7 @@ async def verify_docx(request: Request, file: UploadFile = File(...)):
 
     content_bytes = await file.read(MAX_VERIFY_SIZE + 1)
     if len(content_bytes) > MAX_VERIFY_SIZE:
-        raise HTTPException(status_code=413, detail="Размер файла превышает лимит 25 МБ")
+        raise HTTPException(status_code=413, detail=f"Размер файла превышает лимит {MAX_VERIFY_SIZE // (1024 * 1024)} МБ")
 
     try:
         docx_buffer = io.BytesIO(content_bytes)

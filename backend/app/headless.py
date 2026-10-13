@@ -13,6 +13,8 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
 from .engine.headless_report import HeadlessReport
+from .engine.image_input import IMAGE_SOURCE_SCHEMA, MAX_IMAGES_COUNT, load_image_input
+from .engine.mcp_batch import BATCH_SCHEMA, validate_batch_calls
 from .engine.pdf_converter import pdf_export_enabled
 from .engine.profile import load_profile_input
 from .version import APP_VERSION
@@ -36,7 +38,7 @@ def _json(value: Any) -> str:
 def _text_result(value: Any, *, is_error: bool = False) -> types.CallToolResult:
     return types.CallToolResult(
         content=[types.TextContent(text=value if isinstance(value, str) else _json(value))],
-        structuredContent=None if isinstance(value, str) else value,
+        structuredContent=value if isinstance(value, dict) else None,
         isError=is_error,
     )
 
@@ -67,7 +69,10 @@ def _decode_image(value: str) -> bytes:
         raise ValueError("Параметр base64_data содержит невалидные данные") from exc
 
 
-def _tool(name: str, description: str, properties: dict[str, Any], required: list[str] | None = None) -> types.Tool:
+def _tool(
+    name: str, description: str, properties: dict[str, Any],
+    required: list[str] | None = None, **schema_fields: Any,
+) -> types.Tool:
     return types.Tool(
         name=name,
         description=description,
@@ -76,6 +81,7 @@ def _tool(name: str, description: str, properties: dict[str, Any], required: lis
             "properties": properties,
             "required": required or [],
             "additionalProperties": True,
+            **schema_fields,
         },
     )
 
@@ -83,6 +89,11 @@ def _tool(name: str, description: str, properties: dict[str, Any], required: lis
 def _tools() -> list[types.Tool]:
     revision = {"type": "string", "description": "Свежая версия из get_report_state"}
     tools = [
+        types.Tool(
+            name="batch",
+            description="Выполнить от 1 до 20 инструментов последовательно; ошибки собираются без отката правок.",
+            inputSchema=BATCH_SCHEMA,
+        ),
         _tool(
             "create_report",
             "Создать один новый отчёт в оперативной памяти процесса.",
@@ -120,12 +131,35 @@ def _tools() -> list[types.Tool]:
             {
                 "filename": {"type": "string"},
                 "base64_data": {"type": "string"},
+                "file_path": {"type": "string", "description": "Путь к изображению на машине сервера; поддерживает ~ и относительные пути"},
                 "expected_image_revision": revision,
                 "expected_revision": revision,
                 "caption": {"type": "string"},
                 "insert_into_report": {"type": "boolean", "default": False},
             },
-            ["filename", "base64_data", "expected_image_revision"],
+            ["filename", "expected_image_revision"],
+            **IMAGE_SOURCE_SCHEMA,
+        ),
+        _tool(
+            "upload_images",
+            "Последовательно загрузить несколько изображений с одной проверкой версии; вернуть ошибки отдельных файлов.",
+            {
+                "images": {
+                    "type": "array", "minItems": 1, "maxItems": MAX_IMAGES_COUNT,
+                    "items": {
+                        "type": "object", "required": ["filename"],
+                        "properties": {
+                            "filename": {"type": "string"}, "base64_data": {"type": "string"},
+                            "file_path": {"type": "string"}, "caption": {"type": "string"},
+                            "insert_into_report": {"type": "boolean", "default": False},
+                        },
+                        **IMAGE_SOURCE_SCHEMA,
+                    },
+                },
+                "expected_image_revision": revision,
+                "expected_revision": revision,
+            },
+            ["images", "expected_image_revision"],
         ),
         _tool(
             "append_or_update_section",
@@ -201,73 +235,103 @@ def _resources(report: HeadlessReport) -> list[types.Resource]:
     return result
 
 
+def _dispatch_tool(report: HeadlessReport, name: str, args: dict[str, Any]) -> types.CallToolResult:
+    """Dispatch one headless tool with the same error handling inside batches."""
+    try:
+        if name == "batch":
+            calls = validate_batch_calls(args)
+            results = []
+            for call in calls:
+                response = _dispatch_tool(report, call["name"], call["arguments"])
+                if response.is_error:
+                    error = "\n".join(block.text for block in response.content if isinstance(block, types.TextContent))
+                    results.append({"name": call["name"], "ok": False, "error": error})
+                    if args.get("stop_on_error", False):
+                        break
+                else:
+                    value = response.structured_content
+                    if value is None:
+                        value = response.model_dump(mode="json", by_alias=True, exclude_none=True)
+                    results.append({"name": call["name"], "ok": True, "result": value})
+            return _text_result(results)
+        if name == "create_report":
+            return _text_result(report.create_report(_object(args, "metadata", required=False)))
+        if name == "import_profile":
+            expected = args.get("expected_meta_revision")
+            if expected is not None and not isinstance(expected, str):
+                raise ValueError("Параметр «expected_meta_revision» должен быть строкой")
+            return _text_result(report.import_profile(load_profile_input(args), expected))
+        if name == "get_report_state":
+            return _text_result(report.get_report_state())
+        if name == "list_images":
+            return _text_result({"images": report.list_images()})
+        if name == "get_image":
+            filename = _string(args, "filename")
+            data = report.get_image(filename)
+            image_type = mimetypes.guess_type(filename)[0] or "image/png"
+            return types.CallToolResult(content=[
+                types.ImageContent(data=base64.b64encode(data).decode("ascii"), mimeType=image_type),
+                types.TextContent(text=f"Изображение «{filename}» получено"),
+            ])
+        if name == "upload_image":
+            expected_revision = args.get("expected_revision")
+            result = report.upload_image(
+                _string(args, "filename"), load_image_input(args, _decode_image),
+                _string(args, "expected_image_revision"),
+                caption=str(args.get("caption", "")),
+                insert_into_report=bool(args.get("insert_into_report", False)),
+                expected_revision=expected_revision if isinstance(expected_revision, str) else None,
+            )
+            return _text_result(result)
+        if name == "upload_images":
+            items = args.get("images")
+            if not isinstance(items, list) or not 1 <= len(items) <= MAX_IMAGES_COUNT:
+                raise ValueError(f"Ожидается от 1 до {MAX_IMAGES_COUNT} изображений")
+            expected_image = _string(args, "expected_image_revision")
+            prepared = []
+            for item in items:
+                if not isinstance(item, dict):
+                    prepared.append(item)
+                    continue
+                image = {key: item[key] for key in ("filename", "caption", "insert_into_report") if key in item}
+                try:
+                    image["data"] = load_image_input(item, _decode_image)
+                except (ValueError, OSError) as exc:
+                    image["error"] = str(exc)
+                prepared.append(image)
+            return _text_result(report.upload_images(
+                prepared, expected_image, expected_revision=args.get("expected_revision"),
+            ))
+        if name == "append_or_update_section":
+            return _text_result(report.append_or_update_section(
+                _string(args, "section_heading"), _string(args, "section_content", required=False),
+                _string(args, "expected_revision"),
+            ))
+        if name == "update_meta":
+            return _text_result(report.update_meta(_object(args, "fields"), _string(args, "expected_meta_revision")))
+        if name == "delete_image":
+            return _text_result(report.delete_image(_string(args, "filename"), _string(args, "expected_image_revision")))
+        if name == "lint_report":
+            return _text_result(report.lint_report())
+        if name == "autofix_typography":
+            return _text_result(report.autofix_typography(_string(args, "expected_revision")))
+        if name == "export_report":
+            return _text_result(report.export_report(
+                _string(args, "filename"), _string(args, "expected_revision"),
+                _string(args, "expected_meta_revision"), _string(args, "expected_image_revision"),
+                args.get("format") if isinstance(args.get("format"), str) else None,
+            ))
+        raise ValueError(f"Неизвестный инструмент: {name}")
+    except (TypeError, ValueError, OSError, RuntimeError) as exc:
+        return _text_result(str(exc), is_error=True)
+
+
 def _make_server(report: HeadlessReport) -> Server:
     async def list_tools(_ctx: Any, _params: Any) -> types.ListToolsResult:
         return types.ListToolsResult(tools=_tools())
 
     async def call_tool(_ctx: Any, params: types.CallToolRequestParams) -> types.CallToolResult:
-        args = params.arguments or {}
-        try:
-            if params.name == "create_report":
-                return _text_result(report.create_report(_object(args, "metadata", required=False)))
-            if params.name == "import_profile":
-                expected = args.get("expected_meta_revision")
-                if expected is not None and not isinstance(expected, str):
-                    raise ValueError("Параметр «expected_meta_revision» должен быть строкой")
-                return _text_result(report.import_profile(load_profile_input(args), expected))
-            if params.name == "get_report_state":
-                return _text_result(report.get_report_state())
-            if params.name == "list_images":
-                return _text_result({"images": report.list_images()})
-            if params.name == "get_image":
-                filename = _string(args, "filename")
-                data = report.get_image(filename)
-                image_type = mimetypes.guess_type(filename)[0] or "image/png"
-                return types.CallToolResult(content=[
-                    types.ImageContent(data=base64.b64encode(data).decode("ascii"), mimeType=image_type),
-                    types.TextContent(text=f"Изображение «{filename}» получено"),
-                ])
-            if params.name == "upload_image":
-                expected_revision = args.get("expected_revision")
-                insert = bool(args.get("insert_into_report", False))
-                result = report.upload_image(
-                    _string(args, "filename"),
-                    _decode_image(_string(args, "base64_data")),
-                    _string(args, "expected_image_revision"),
-                    caption=str(args.get("caption", "")),
-                    insert_into_report=insert,
-                    expected_revision=expected_revision if isinstance(expected_revision, str) else None,
-                )
-                return _text_result(result)
-            if params.name == "append_or_update_section":
-                return _text_result(report.append_or_update_section(
-                    _string(args, "section_heading"),
-                    _string(args, "section_content", required=False),
-                    _string(args, "expected_revision"),
-                ))
-            if params.name == "update_meta":
-                return _text_result(report.update_meta(
-                    _object(args, "fields"), _string(args, "expected_meta_revision"),
-                ))
-            if params.name == "delete_image":
-                return _text_result(report.delete_image(
-                    _string(args, "filename"), _string(args, "expected_image_revision"),
-                ))
-            if params.name == "lint_report":
-                return _text_result(report.lint_report())
-            if params.name == "autofix_typography":
-                return _text_result(report.autofix_typography(_string(args, "expected_revision")))
-            if params.name == "export_report":
-                return _text_result(report.export_report(
-                    _string(args, "filename"),
-                    _string(args, "expected_revision"),
-                    _string(args, "expected_meta_revision"),
-                    _string(args, "expected_image_revision"),
-                    args.get("format") if isinstance(args.get("format"), str) else None,
-                ))
-            raise ValueError(f"Неизвестный инструмент: {params.name}")
-        except (TypeError, ValueError, OSError, RuntimeError) as exc:
-            return _text_result(str(exc), is_error=True)
+        return _dispatch_tool(report, params.name, params.arguments or {})
 
     async def list_resources(_ctx: Any, _params: Any) -> types.ListResourcesResult:
         return types.ListResourcesResult(resources=_resources(report))

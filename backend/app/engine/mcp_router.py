@@ -30,6 +30,8 @@ from .typography import apply_typography_outside_code, strip_trailing_dot
 from .section_editor import edit_section, sections, section_identifier
 from .block_editor import blocks, edit_block, move_figure
 from .profile import load_profile_input, profile_metadata
+from .image_input import IMAGE_SOURCE_SCHEMA, load_image_input
+from .mcp_batch import BATCH_SCHEMA, validate_batch_calls
 from ..version import APP_VERSION
 
 router = APIRouter()
@@ -106,6 +108,11 @@ def _apply_content_patches(content: str, patches: Any) -> str:
 
 MCP_LIVE_TOOLS = [
     {
+        "name": "batch",
+        "description": "Выполняет от 1 до 20 инструментов последовательно; ошибки собираются без отката правок. Вложенный batch запрещён.",
+        "inputSchema": BATCH_SCHEMA,
+    },
+    {
         "name": "list_images",
         "description": (
             "Возвращает список всех прикрепленных к отчету изображений и скриншотов, размеры в пикселях и байтах, MIME-типы "
@@ -162,11 +169,12 @@ MCP_LIVE_TOOLS = [
         "description": (
             "Загружает изображение (график matplotlib, схему) в сессию отчета. "
             "Изображение отображается в браузере в панели медиа и на страницах макета А4. "
-            "Принимает имя файла и данные base64. Опционально может сразу вставить ссылку в Markdown."
+            "Принимает имя файла и данные base64 или file_path на машине сервера. Опционально может сразу вставить ссылку в Markdown."
         ),
         "inputSchema": {
             "type": "object",
-            "required": ["filename", "base64_data", "expected_revision"],
+            "required": ["filename", "expected_revision"],
+            **IMAGE_SOURCE_SCHEMA,
             "properties": {
                 "expected_revision": {"type": "string", "description": "Текущая revision из get_report_state"},
                 "filename": {
@@ -176,6 +184,10 @@ MCP_LIVE_TOOLS = [
                 "base64_data": {
                     "type": "string",
                     "description": "Бинарные данные изображения, закодированные в Base64"
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": "Путь к изображению на машине сервера; поддерживает ~ и относительные пути",
                 },
                 "caption": {
                     "type": "string",
@@ -191,7 +203,7 @@ MCP_LIVE_TOOLS = [
     },
     {
         "name": "upload_images",
-        "description": "Атомарно загружает несколько рисунков и при необходимости вставляет их после блоков из текущего outline.",
+        "description": "Атомарно загружает несколько рисунков из base64_data или file_path на машине сервера и при необходимости вставляет их после блоков из текущего outline.",
         "inputSchema": {
             "type": "object", "required": ["images", "expected_revision"],
             "properties": {
@@ -199,9 +211,11 @@ MCP_LIVE_TOOLS = [
                 "images": {
                     "type": "array", "minItems": 1, "maxItems": MAX_IMAGES_COUNT,
                     "items": {
-                        "type": "object", "required": ["filename", "base64_data"],
+                        "type": "object", "required": ["filename"],
+                        **IMAGE_SOURCE_SCHEMA,
                         "properties": {
                             "filename": {"type": "string"}, "base64_data": {"type": "string"},
+                            "file_path": {"type": "string"},
                             "caption": {"type": "string"}, "after_block_id": {"type": "string"}
                         }
                     }
@@ -564,8 +578,23 @@ def _mcp_tools_page(cursor: Any) -> Dict[str, Any]:
 # Tool handlers operate on the selected user session.
 # ==============================================================================
 
-async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: SessionData) -> Dict[str, Any]:
-    if tool_name == "list_images":
+async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: SessionData) -> Any:
+    """Dispatch tools without locking so a batch can hold one lock across all calls."""
+    if tool_name == "batch":
+        calls = validate_batch_calls(args)
+        results = []
+        for call in calls:
+            try:
+                result = await _dispatch_mcp_tool(call["name"], call["arguments"], session)
+                results.append({"name": call["name"], "ok": True, "result": result})
+            except Exception as exc:
+                results.append({"name": call["name"], "ok": False,
+                                "error": f"Ошибка выполнения {call['name']}: {exc}"})
+                if args.get("stop_on_error", False):
+                    break
+        return results
+
+    elif tool_name == "list_images":
         images = session.list_images()
         return {
             "total_count": len(images),
@@ -630,16 +659,19 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
 
     elif tool_name == "upload_image":
         filename = args.get("filename", "").strip()
-        b64_data = args.get("base64_data", "").strip()
         caption = args.get("caption", "").strip()
         insert_into_report = args.get("insert_into_report", False)
 
         if args.get("expected_revision") != session.revision:
             raise ValueError("Документ изменился: перечитайте get_report_state перед загрузкой рисунка")
-        if not filename or not b64_data:
-            raise ValueError("Не указан filename или base64_data")
+        if not filename:
+            raise ValueError("Не указан filename")
 
-        raw_bytes = _decode_image_data(b64_data, filename)
+        raw_bytes = await asyncio.to_thread(
+            load_image_input, args, lambda encoded: _decode_image_data(encoded.strip(), filename),
+        )
+        if args.get("expected_revision") != session.revision:
+            raise ValueError("Документ изменился: перечитайте get_report_state перед загрузкой рисунка")
         safe_name = session.add_image(filename, raw_bytes)
 
         await session.broadcast({
@@ -685,16 +717,17 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
             raise ValueError("Превышено допустимое количество изображений в сессии")
         anchors = {block.id: block.end for block in blocks(session.content, session.revision)}
         staged = []
+        image_revision = session.image_revision
         names = set(session.images)
         insertions: Dict[int, List[str]] = {}
         for item in items:
-            if not isinstance(item, dict) or not isinstance(item.get("filename"), str) or not isinstance(item.get("base64_data"), str):
-                raise ValueError("Каждое изображение требует filename и base64_data")
+            if not isinstance(item, dict) or not isinstance(item.get("filename"), str):
+                raise ValueError("Каждое изображение требует filename и base64_data или file_path")
             name = SessionData.sanitize_filename(item["filename"])
             if name in names:
                 raise ValueError(f"Повторяющееся имя изображения: {name}")
             names.add(name)
-            raw = _decode_image_data(item["base64_data"], name)
+            raw = await asyncio.to_thread(load_image_input, item, lambda encoded: _decode_image_data(encoded, name))
             staged.append((name, raw))
             anchor_id = item.get("after_block_id")
             if anchor_id is not None:
@@ -702,6 +735,10 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
                     raise ValueError("Целевой блок для рисунка не найден в текущем outline")
                 caption = str(item.get("caption") or "Иллюстрация").replace("\n", " ").replace("]", "")
                 insertions.setdefault(anchors[anchor_id], []).append(f"![{caption}]({name})")
+        if args.get("expected_revision") != session.revision:
+            raise ValueError("Документ изменился: перечитайте outline перед пакетной загрузкой")
+        if session.image_revision != image_revision:
+            raise ValueError("Набор изображений изменился: перечитайте list_images перед пакетной загрузкой")
         new_md = session.content
         for offset, figures in sorted(insertions.items(), reverse=True):
             left, right = new_md[:offset].rstrip("\n"), new_md[offset:].lstrip("\n")
@@ -1138,9 +1175,13 @@ async def _dispatch_mcp_tool_safely(
     tool_name: str,
     args: Dict[str, Any],
     session: SessionData,
-) -> Dict[str, Any]:
+) -> Any:
     """Allow parallel reads while serializing revision-sensitive mutations."""
-    if tool_name in MCP_MUTATING_TOOLS:
+    mutating = tool_name in MCP_MUTATING_TOOLS
+    if tool_name == "batch":
+        calls = validate_batch_calls(args)
+        mutating = any(call["name"] in MCP_MUTATING_TOOLS for call in calls)
+    if mutating:
         async with session.mcp_write_lock:
             return await _dispatch_mcp_tool(tool_name, args, session)
     return await _dispatch_mcp_tool(tool_name, args, session)

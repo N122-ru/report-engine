@@ -330,6 +330,7 @@ def test_mcp_tools_list_keeps_core_on_first_page_and_paginates_the_rest():
         "apply_patches", "get_document_outline", "replace_block", "delete_block", "move_figure",
         "get_last_edit", "get_edit_history", "rollback_last_edit", "lint_report",
         "autofix_typography", "update_meta", "delete_image", "delete_images", "import_profile",
+        "batch",
     }
 
 
@@ -642,6 +643,201 @@ def _call_report_tool(token, name, arguments):
     assert response.status_code == 200
     result = response.json()["result"]
     return result, json.loads(result["content"][0]["text"]) if not result["isError"] else None
+
+
+def test_mcp_batch_runs_mutation_and_status_calls_in_order():
+    token = client.get("/api/session/init").json()["token"]
+    _, state = _call_report_tool(token, "get_report_state", {})
+    result, payload = _call_report_tool(token, "batch", {"calls": [
+        {"name": "update_meta", "arguments": {
+            "work_theme": "Проверка", "expected_meta_revision": state["meta_revision"],
+        }},
+        {"name": "get_report_state", "arguments": {}},
+        {"name": "list_images", "arguments": {}},
+    ]})
+    assert result["isError"] is False
+    assert all(item["ok"] for item in payload)
+    assert [item["name"] for item in payload] == ["update_meta", "get_report_state", "list_images"]
+    assert payload[1]["result"]["metadata"]["work_theme"] == "Проверка"
+    assert payload[2]["result"]["images"] == []
+
+
+@pytest.mark.parametrize("stop_on_error, count", [(False, 2), (True, 1)])
+def test_mcp_batch_collects_error_and_optionally_stops(stop_on_error, count):
+    token = client.get("/api/session/init").json()["token"]
+    result, payload = _call_report_tool(token, "batch", {"stop_on_error": stop_on_error, "calls": [
+        {"name": "unknown", "arguments": {}}, {"name": "get_report_state", "arguments": {}},
+    ]})
+    assert result["isError"] is False
+    assert len(payload) == count
+    assert payload[0]["ok"] is False
+    assert "Неизвестный инструмент" in payload[0]["error"]
+    if not stop_on_error:
+        assert payload[1]["ok"] is True
+
+
+@pytest.mark.parametrize("calls", [
+    [], [{"name": "list_images", "arguments": {}}] * 21,
+    [{"name": "list_images", "arguments": []}],
+    [{"name": "update_meta", "arguments": {"work_theme": "Не записывать"}},
+     {"name": "batch", "arguments": {}}],
+])
+def test_mcp_invalid_batch_rejects_entire_array(calls):
+    token = client.get("/api/session/init").json()["token"]
+    before = client.get(f"/api/session/init?token={token}").json()
+    result, _ = _call_report_tool(token, "batch", {"calls": calls})
+    assert result["isError"] is True
+    assert client.get(f"/api/session/init?token={token}").json() == before
+
+
+@pytest.mark.anyio
+async def test_mcp_batch_holds_write_lock_for_entire_sequence_and_allows_reads():
+    import asyncio
+    from app.engine.mcp_router import _dispatch_mcp_tool_safely
+    from app.engine.sessions import session_manager
+
+    session = session_manager.get_or_create()
+    events = asyncio.Queue(maxsize=1)
+    session.add_listener(events)
+    await events.put({"type": "occupied"})
+    batch = asyncio.create_task(_dispatch_mcp_tool_safely("batch", {"calls": [
+        {"name": "update_meta", "arguments": {
+            "work_theme": "Первая тема", "expected_meta_revision": session.meta_revision,
+        }},
+        {"name": "get_report_state", "arguments": {}},
+    ]}, session))
+    competing = None
+    try:
+        await asyncio.sleep(0)
+        assert session.mcp_write_lock.locked()
+        read = await _dispatch_mcp_tool_safely("batch", {"calls": [
+            {"name": "get_report_state", "arguments": {}},
+        ]}, session)
+        assert read[0]["result"]["metadata"]["work_theme"] == "Первая тема"
+        competing = asyncio.create_task(_dispatch_mcp_tool_safely("update_meta", {
+            "work_theme": "Вторая тема", "expected_meta_revision": session.meta_revision,
+        }, session))
+        await asyncio.sleep(0)
+        assert not competing.done()
+        await events.get()
+        results = await asyncio.wait_for(batch, timeout=2)
+        assert results[1]["result"]["metadata"]["work_theme"] == "Первая тема"
+        await events.get()
+        await asyncio.wait_for(competing, timeout=2)
+        assert session.meta["work_theme"] == "Вторая тема"
+    finally:
+        session.remove_listener(events)
+        for task in (batch, competing):
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+
+def test_mcp_upload_image_reads_file_path_and_inserts_markdown(tmp_path):
+    token = client.get("/api/session/init").json()["token"]
+    _, state = _call_report_tool(token, "get_report_state", {})
+    sample = b"\x89PNG\r\n\x1a\n" + b"payload"
+    path = tmp_path / "screen.png"
+    path.write_bytes(sample)
+    result, payload = _call_report_tool(token, "upload_image", {
+        "filename": "Снимок экрана.png", "file_path": str(path),
+        "expected_revision": state["revision"], "caption": "Снимок", "insert_into_report": True,
+    })
+    assert result["isError"] is False
+    assert payload["filename"] == "Снимок_экрана.png"
+    assert client.get(f"/api/session/{token}/images/Снимок_экрана.png").content == sample
+    assert "![Снимок](Снимок_экрана.png)" in client.get(f"/api/session/init?token={token}").json()["content"]
+
+
+@pytest.mark.parametrize("source, message", [
+    ({}, "base64_data или file_path"),
+    ({"file_path": "screen.png", "base64_data": "AAAA"}, "base64_data или file_path"),
+    ({"file_path": "missing.png"}, "не найден"),
+])
+def test_mcp_upload_image_rejects_invalid_file_sources(tmp_path, source, message):
+    token = client.get("/api/session/init").json()["token"]
+    _, state = _call_report_tool(token, "get_report_state", {})
+    if "file_path" in source:
+        source = {**source, "file_path": str(tmp_path / source["file_path"])}
+    result, _ = _call_report_tool(token, "upload_image", {
+        "filename": "screen.png", "expected_revision": state["revision"], **source,
+    })
+    assert result["isError"] is True
+    assert message in result["content"][0]["text"]
+    assert client.get(f"/api/session/{token}/images").json()["images"] == []
+
+
+def test_mcp_upload_images_accepts_files_and_remains_atomic(tmp_path):
+    from app.engine.sessions import MAX_IMAGE_SIZE
+
+    token = client.get("/api/session/init").json()["token"]
+    _, state = _call_report_tool(token, "get_report_state", {})
+    path = tmp_path / "one.png"
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"payload")
+    large = tmp_path / "large.png"
+    with large.open("wb") as output:
+        output.truncate(MAX_IMAGE_SIZE + 1)
+    invalid, _ = _call_report_tool(token, "upload_images", {
+        "expected_revision": state["revision"], "images": [
+            {"filename": "one.png", "file_path": str(path)},
+            {"filename": "large.png", "file_path": str(large)},
+        ],
+    })
+    assert invalid["isError"] is True
+    assert "15 МБ" in invalid["content"][0]["text"]
+    assert client.get(f"/api/session/{token}/images").json()["images"] == []
+    valid, payload = _call_report_tool(token, "upload_images", {
+        "expected_revision": state["revision"], "images": [
+            {"filename": "one.png", "file_path": str(path)},
+            {"filename": "two.png", "file_path": str(path)},
+        ],
+    })
+    assert valid["isError"] is False
+    assert payload["uploaded_count"] == 2
+    schemas = {tool["name"]: tool["inputSchema"] for tool in _list_all_mcp_tools(token)}
+    assert schemas["batch"]["properties"]["calls"]["maxItems"] == 20
+    assert "base64_data" not in schemas["upload_image"]["required"]
+    assert "file_path" in schemas["upload_images"]["properties"]["images"]["items"]["properties"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("tool", ["upload_image", "upload_images"])
+async def test_mcp_file_reads_leave_loop_responsive_and_recheck_revision(tmp_path, monkeypatch, tool):
+    import asyncio
+    import threading
+    from app.engine import mcp_router
+    from app.engine.sessions import session_manager
+
+    session = session_manager.get_or_create()
+    path = tmp_path / "screen.png"
+    path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    started = threading.Event()
+    release = threading.Event()
+    original = mcp_router.load_image_input
+
+    def delayed_read(args, decoder):
+        started.set()
+        if not release.wait(timeout=3):
+            raise ValueError("Чтение файла заблокировало цикл событий")
+        return original(args, decoder)
+
+    monkeypatch.setattr(mcp_router, "load_image_input", delayed_read)
+    item = {"filename": "screen.png", "file_path": str(path)}
+    args = {"expected_revision": session.revision, **(item if tool == "upload_image" else {"images": [item]})}
+    upload = asyncio.create_task(mcp_router._dispatch_mcp_tool_safely(tool, args, session))
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        await session_manager.update_content(session.token, "Правка браузера.", source="web")
+        release.set()
+        with pytest.raises(ValueError, match="Документ изменился"):
+            await asyncio.wait_for(upload, timeout=2)
+        assert session.images == {}
+        assert session.content == "Правка браузера."
+    finally:
+        release.set()
+        if not upload.done():
+            upload.cancel()
+        await asyncio.gather(upload, return_exceptions=True)
 
 
 def test_section_replace_preserves_nested_headings_code_and_siblings():

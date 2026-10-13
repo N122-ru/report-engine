@@ -24,6 +24,7 @@ Own regression tests for the backend API, report generation, normocontrol, MCP s
 - Add regression coverage for every bug fix or behavior change that can be tested deterministically.
 - Keep fixtures isolated and avoid persistent test artifacts in the repository.
 - Packaging regressions must reject missing or corrupted frozen runtime data, including DOCX templates and every web asset; unit fixtures must not require a prior frontend build.
+- MCP regressions cover batch preflight/continuation/stop behavior, live write-lock serialization with concurrent reads, file-source exclusivity and size limits, and the distinct atomic live versus partial-success headless image-upload contracts.
 - Launcher coverage checks Windows scripts statically and Linux scripts at runtime, including clean MCP stdout, failure exit codes, selected browser URLs, and readiness gating. Package guides must cover both MCP transports and novice recovery.
 
 ## Verification

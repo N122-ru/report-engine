@@ -20,16 +20,15 @@ from .pdf_converter import convert_docx_to_pdf
 from .markdown_parser import _image_size
 from .typography import apply_typography_rules, strip_trailing_dot
 from .profile import profile_metadata, validate_profile
+from .image_input import MAX_IMAGE_SIZE, MAX_IMAGES_COUNT
 
 MAX_MARKDOWN_BYTES = 500 * 1024
-MAX_IMAGE_SIZE = 15 * 1024 * 1024
-MAX_IMAGES_COUNT = 150
+# BMP is not supported; WebP is checked separately by its RIFF container.
 IMAGE_SIGNATURES = (
     b"\x89PNG\r\n\x1a\n",
     b"\xff\xd8\xff",
     b"GIF87a",
     b"GIF89a",
-    b"BM",
 )
 
 
@@ -80,8 +79,8 @@ class HeadlessReport:
         if not isinstance(data, bytes) or not data:
             raise ValueError("Данные изображения пусты")
         if len(data) > MAX_IMAGE_SIZE:
-            raise ValueError("Размер изображения превышает 15 МБ")
-        valid_signature = data.startswith(IMAGE_SIGNATURES[:-1]) or (
+            raise ValueError(f"Размер изображения превышает {MAX_IMAGE_SIZE // (1024 * 1024)} МБ")
+        valid_signature = data.startswith(IMAGE_SIGNATURES) or (
             data.startswith(b"RIFF") and len(data) >= 12 and data[8:12] == b"WEBP"
         )
         if not valid_signature:
@@ -128,12 +127,18 @@ class HeadlessReport:
         insert_into_report: bool = False,
         expected_revision: str | None = None,
     ) -> dict[str, Any]:
+        """Upload one image under the current image and optional text revisions."""
         self._require_report()
         self._check_revision("image_revision", expected_image_revision)
         if insert_into_report:
             if expected_revision is None:
                 raise ValueError("Вставка изображения требует revision текста")
             self._check_revision("revision", expected_revision)
+        self._store_image(filename, data, caption, insert_into_report)
+        return self._revisions()
+
+    def _store_image(self, filename: str, data: bytes, caption: str, insert_into_report: bool) -> str:
+        """Validate and store one image without repeating batch revision checks."""
         safe_name = self._sanitize_filename(filename)
         self._validate_image_data(data)
         if safe_name in self.images:
@@ -149,7 +154,45 @@ class HeadlessReport:
         self.images[safe_name] = data
         self.image_hashes[safe_name] = hashlib.sha256(data).hexdigest()
         self.content = next_content
-        return self._revisions()
+        return safe_name
+
+    def upload_images(
+        self, images: list[dict[str, Any]], expected_image_revision: str,
+        *, expected_revision: str | None = None,
+    ) -> dict[str, Any]:
+        """Upload valid items sequentially, collecting per-item validation errors.
+
+        Revisions are checked once before any write. Input errors captured at
+        the transport boundary remain in the ordered results alongside core
+        validation errors; successful uploads are not rolled back.
+        """
+        self._require_report()
+        if not isinstance(images, list) or not 1 <= len(images) <= MAX_IMAGES_COUNT:
+            raise ValueError(f"Ожидается от 1 до {MAX_IMAGES_COUNT} изображений")
+        self._check_revision("image_revision", expected_image_revision)
+        if any(isinstance(item, dict) and item.get("insert_into_report") for item in images):
+            if expected_revision is None:
+                raise ValueError("Вставка изображения требует revision текста")
+            self._check_revision("revision", expected_revision)
+        results = []
+        for item in images:
+            filename = item.get("filename") if isinstance(item, dict) else None
+            try:
+                if not isinstance(item, dict):
+                    raise ValueError("Каждое изображение должно быть объектом")
+                if "error" in item:
+                    raise ValueError(item["error"])
+                if not isinstance(item.get("caption", ""), str):
+                    raise ValueError("Параметр caption должен быть строкой")
+                if not isinstance(item.get("insert_into_report", False), bool):
+                    raise ValueError("Параметр insert_into_report должен быть логическим значением")
+                name = self._store_image(filename, item.get("data"), item.get("caption", ""),
+                                         item.get("insert_into_report", False))
+                results.append({"filename": name, "ok": True, "result": self._revisions()})
+            except ValueError as exc:
+                results.append({"filename": filename, "ok": False, "error": str(exc)})
+        return {"uploaded_count": sum(item["ok"] for item in results),
+                "results": results, **self._revisions()}
 
     def delete_image(self, filename: str, expected_image_revision: str) -> dict[str, Any]:
         self._require_report()

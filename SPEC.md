@@ -129,6 +129,26 @@ creates its default `output` directory.
 
 ### Tool Contract
 
+- Both MCP transports expose `batch` with 1–20 `{name, arguments}` calls executed
+  sequentially. Results are ordered `{name, ok, result|error}` entries; errors
+  continue by default, while `stop_on_error: true` stops at the first error.
+  Nested batches and malformed call arrays fail preflight before any execution.
+  All available tools are allowed; mutations are not rolled back, and revision
+  arguments are never inferred from previous results. Live mutating batches hold
+  one session MCP write lock across the complete sequence; read-only calls remain
+  available without that lock.
+- Image uploads accept exactly one of `base64_data` or `file_path` per image.
+  Paths are server-local, expand `~`, and resolve relative to the process cwd;
+  reads are bounded and run off the event loop in live MCP. The shared image
+  limits are 15 MiB per file and 150 images per report, including HTTP generation.
+  DOCX auditing retains its separate 25 MiB limit; error text follows each limit.
+- Live `upload_images` retains atomic validation and `after_block_id` insertion
+  with `expected_revision`. Headless `upload_images` checks one
+  `expected_image_revision` before storing valid items, returning `uploaded_count`,
+  ordered `results` (per-item `filename`, `ok`, `result|error`), and final revisions.
+  Per-item `caption` and `insert_into_report` mirror single-image append behavior;
+  any insertion additionally requires a fresh `expected_revision` before writes.
+
 | Tools | Contract |
 | --- | --- |
 | `create_report` | Create one RAM draft; never silently reset an existing report. |
@@ -136,6 +156,8 @@ creates its default `output` directory.
 | `get_report_state` | Return Markdown, metadata, image manifest, `revision`, `meta_revision`, and `image_revision`. |
 | `list_images`, `get_image` | Read media/manifest; return native MCP image content for vision. |
 | `upload_image`, `delete_image` | Require fresh image revision, reject duplicate names and invalid bytes; deletion rejects referenced images. Inserting an image into text also requires text revision. |
+| `upload_images` | Upload 1–150 images with one image revision check and per-item results; valid items survive other items' errors. |
+| `batch` | Execute 1–20 non-nested tool calls sequentially, including mutations and export, collecting results and optional stop-on-error. |
 | `append_or_update_section` | Add or replace the body of an unambiguous heading using fresh text revision; retain adjacent sections. |
 | `update_meta` | Apply supplied fields using fresh metadata revision. |
 | `lint_report`, `autofix_typography` | Validate generated DOCX in RAM; typography writes require fresh text revision. |

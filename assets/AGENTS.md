@@ -14,6 +14,7 @@ Own shared runtime assets that are consumed by the backend, frontend, or report 
 
 - Keep `SKILL.md` aligned with the live MCP tools and the report-generation behavior.
 - Document profile import (`import_profile`, format discriminator, version, and revision precondition) in `SKILL.md` whenever that tool contract changes.
+- Keep batch ordering/error behavior, server-local image paths, image limits, and live/headless upload revision and partial-success differences visible in `SKILL.md`.
 - Do not add credentials, personal data, generated reports, or temporary files to this directory.
 - Internal instructions and metadata are written in English; text intended for report users remains Russian.
 

@@ -6,14 +6,13 @@ import asyncio
 from typing import Dict, List
 from collections import defaultdict
 from fastapi import Request, HTTPException
+from .image_input import MAX_IMAGE_SIZE, MAX_IMAGES_COUNT
 
 # -------------------------------------------------------------
 # Data and file limits protect against memory exhaustion and ReDoS.
 # -------------------------------------------------------------
 MAX_MARKDOWN_SIZE = 500 * 1024            # 500 KB (~150 pages; typically 20–50 KB).
 MAX_AUTOFIX_SIZE = 500 * 1024             # 500 KB of text for autofix.
-MAX_IMAGE_SIZE = 25 * 1024 * 1024         # 25 MB per image.
-MAX_IMAGES_COUNT = 150                    # At most 150 images per report.
 MAX_VERIFY_SIZE = 25 * 1024 * 1024        # 25 MB per uploaded DOCX audit.
 
 # Limit parallel LibreOffice conversions to avoid OOM: more than two or three

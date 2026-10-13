@@ -20,9 +20,8 @@ from markdown_it import MarkdownIt
 from typing import Dict, List, Optional, Set, Any
 
 from .markdown_parser import _image_size
+from .image_input import MAX_IMAGE_SIZE, MAX_IMAGES_COUNT
 
-MAX_IMAGE_SIZE = 15 * 1024 * 1024  # 15 MB
-MAX_IMAGES_COUNT = 150
 MAX_INACTIVE_HOURS = 48
 
 

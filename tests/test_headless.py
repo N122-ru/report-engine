@@ -1,4 +1,6 @@
 import io
+import base64
+import json
 import subprocess
 import sys
 
@@ -6,6 +8,13 @@ import pytest
 from docx import Document
 
 from backend.app.engine.headless_report import HeadlessReport
+
+
+def call_tool(report, name, arguments):
+    from backend.app.headless import _dispatch_tool
+
+    result = _dispatch_tool(report, name, arguments)
+    return result, json.loads(result.content[0].text) if not result.is_error else None
 
 
 @pytest.fixture
@@ -239,3 +248,256 @@ def test_pdf_export_requires_a_local_converter(report, monkeypatch):
             state["image_revision"],
             "pdf",
         )
+
+
+def test_batch_returns_status_calls_in_order(report):
+    report.create_report()
+    result, payload = call_tool(report, "batch", {"calls": [
+        {"name": "get_report_state", "arguments": {}},
+        {"name": "list_images", "arguments": {}},
+    ]})
+    assert result.is_error is False
+    assert [item["name"] for item in payload] == ["get_report_state", "list_images"]
+    assert all(item["ok"] for item in payload)
+    assert payload[0]["result"] == report.get_report_state()
+    assert payload[1]["result"] == {"images": []}
+
+
+def test_batch_creates_report_and_updates_metadata(report, tmp_path):
+    expected = HeadlessReport(tmp_path).create_report()["meta_revision"]
+    result, payload = call_tool(report, "batch", {"calls": [
+        {"name": "create_report", "arguments": {}},
+        {"name": "update_meta", "arguments": {
+            "fields": {"work_theme": "Проверка"}, "expected_meta_revision": expected,
+        }},
+        {"name": "get_report_state", "arguments": {}},
+    ]})
+    assert result.is_error is False
+    assert all(item["ok"] for item in payload)
+    assert payload[2]["result"]["metadata"]["work_theme"] == "Проверка"
+
+
+@pytest.mark.parametrize("stop_on_error, count", [(False, 3), (True, 2)])
+def test_batch_collects_errors_and_optionally_stops(report, stop_on_error, count):
+    result, payload = call_tool(report, "batch", {"stop_on_error": stop_on_error, "calls": [
+        {"name": "create_report", "arguments": {}},
+        {"name": "unknown", "arguments": {}},
+        {"name": "get_report_state", "arguments": {}},
+    ]})
+    assert result.is_error is False
+    assert len(payload) == count
+    assert payload[0]["ok"] is True
+    assert payload[1] == {"name": "unknown", "ok": False, "error": "Неизвестный инструмент: unknown"}
+    if not stop_on_error:
+        assert payload[2]["ok"] is True
+
+
+@pytest.mark.parametrize("calls", [
+    [], [{"name": "list_images", "arguments": {}}] * 21,
+    [{"name": "create_report", "arguments": {}}, {"name": "batch", "arguments": {}}],
+    [{"name": "create_report", "arguments": {}}, {"name": "list_images", "arguments": []}],
+])
+def test_invalid_batch_is_rejected_before_any_call(report, calls):
+    result, _ = call_tool(report, "batch", {"calls": calls})
+    assert result.is_error is True
+    assert report.metadata is None
+
+
+def test_batch_allows_export_and_preserves_image_content(report, tmp_path):
+    state = report.create_report()
+    sample = b"\x89PNG\r\n\x1a\n" + b"payload"
+    report.upload_image("screen.png", sample, state["image_revision"])
+    state = report.get_report_state()
+    result, payload = call_tool(report, "batch", {"calls": [
+        {"name": "get_image", "arguments": {"filename": "screen.png"}},
+        {"name": "export_report", "arguments": {
+            "filename": "report.docx", **{f"expected_{key}": state[key] for key in (
+                "revision", "meta_revision", "image_revision",
+            )},
+        }},
+    ]})
+    assert result.is_error is False
+    assert all(item["ok"] for item in payload)
+    assert base64.b64decode(payload[0]["result"]["content"][0]["data"]) == sample
+    assert payload[1]["result"]["path"] == str(tmp_path / "report.docx")
+    assert (tmp_path / "report.docx").is_file()
+
+
+@pytest.mark.parametrize("path_kind", ["absolute", "relative", "home"])
+def test_upload_image_reads_file_path(report, tmp_path, monkeypatch, path_kind):
+    state = report.create_report()
+    sample = b"\x89PNG\r\n\x1a\n" + b"payload"
+    path = tmp_path / "source.png"
+    path.write_bytes(sample)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    file_path = {"absolute": str(path), "relative": "source.png", "home": "~/source.png"}[path_kind]
+    result, payload = call_tool(report, "upload_image", {
+        "filename": "Снимок экрана.png", "file_path": file_path,
+        "expected_image_revision": state["image_revision"], "expected_revision": state["revision"],
+        "caption": "Снимок", "insert_into_report": True,
+    })
+    assert result.is_error is False
+    assert report.get_image("Снимок_экрана.png") == sample
+    assert "![Снимок](Снимок_экрана.png)" in report.content
+    assert payload["image_revision"] != state["image_revision"]
+
+
+@pytest.mark.parametrize("source, message", [
+    ({}, "base64_data или file_path"),
+    ({"file_path": "source.png", "base64_data": "AAAA"}, "base64_data или file_path"),
+    ({"file_path": "missing.png"}, "не найден"),
+    ({"file_path": ""}, "непустой строкой"),
+])
+def test_upload_image_rejects_invalid_file_source(report, tmp_path, source, message):
+    state = report.create_report()
+    if source.get("file_path"):
+        source = {**source, "file_path": str(tmp_path / source["file_path"])}
+    result, _ = call_tool(report, "upload_image", {
+        "filename": "screen.png", "expected_image_revision": state["image_revision"], **source,
+    })
+    assert result.is_error is True
+    assert message in result.content[0].text
+    assert report.get_report_state() == state
+
+
+def test_upload_images_reads_two_files_with_one_revision(report, tmp_path):
+    state = report.create_report()
+    sample = b"\x89PNG\r\n\x1a\n" + b"payload"
+    images = []
+    for name in ("one.png", "two.png"):
+        path = tmp_path / name
+        path.write_bytes(sample)
+        images.append({"filename": name, "file_path": str(path), "caption": name, "insert_into_report": True})
+    result, payload = call_tool(report, "upload_images", {
+        "images": images, "expected_image_revision": state["image_revision"],
+        "expected_revision": state["revision"],
+    })
+    assert result.is_error is False
+    assert payload["uploaded_count"] == 2
+    assert all(item["ok"] for item in payload["results"])
+    assert [image["filename"] for image in report.list_images()] == ["one.png", "two.png"]
+    assert report.content.index("one.png") < report.content.index("two.png")
+    assert all(image["is_in_report"] for image in report.list_images())
+
+
+def test_upload_images_collects_duplicate_and_oversized_file_errors(report, tmp_path):
+    from backend.app.engine.headless_report import MAX_IMAGE_SIZE
+
+    state = report.create_report()
+    path = tmp_path / "large.png"
+    with path.open("wb") as output:
+        output.truncate(MAX_IMAGE_SIZE + 1)
+    encoded = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"payload").decode()
+    result, payload = call_tool(report, "upload_images", {
+        "expected_image_revision": state["image_revision"], "images": [
+            {"filename": "Схема сети.png", "base64_data": encoded},
+            {"filename": "Схема_сети.png", "base64_data": encoded},
+            {"filename": "large.png", "file_path": str(path)},
+            {"filename": "last.png", "base64_data": encoded},
+        ],
+    })
+    assert result.is_error is False
+    assert payload["uploaded_count"] == 2
+    assert [item["ok"] for item in payload["results"]] == [True, False, False, True]
+    assert "уже прикреплено" in payload["results"][1]["error"]
+    assert "15 МБ" in payload["results"][2]["error"]
+    assert set(report.images) == {"Схема_сети.png", "last.png"}
+
+
+def test_upload_image_reports_file_read_oserror_without_state_change(report, tmp_path, monkeypatch):
+    from pathlib import Path
+
+    state = report.create_report()
+    path = tmp_path / "screen.png"
+    path.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    def denied_open(self, *args, **kwargs):
+        raise PermissionError("Access denied")
+
+    monkeypatch.setattr(Path, "open", denied_open)
+    result, _ = call_tool(report, "upload_image", {
+        "filename": "screen.png", "file_path": str(path), "expected_image_revision": state["image_revision"],
+    })
+    assert result.is_error is True
+    assert result.content[0].text == "Не удалось прочитать файл изображения"
+    assert report.get_report_state() == state
+
+
+@pytest.mark.parametrize("extra_byte", [False, True])
+def test_upload_image_file_size_boundary(report, tmp_path, extra_byte):
+    from backend.app.engine.headless_report import MAX_IMAGE_SIZE
+
+    state = report.create_report()
+    path = tmp_path / "screen.png"
+    with path.open("wb") as output:
+        output.write(b"\x89PNG\r\n\x1a\n")
+        output.truncate(MAX_IMAGE_SIZE + int(extra_byte))
+    result, _ = call_tool(report, "upload_image", {
+        "filename": "screen.png", "file_path": str(path), "expected_image_revision": state["image_revision"],
+    })
+    assert result.is_error is extra_byte
+    if extra_byte:
+        assert "15 МБ" in result.content[0].text
+        assert report.get_report_state() == state
+    else:
+        assert len(report.get_image("screen.png")) == MAX_IMAGE_SIZE
+
+
+@pytest.mark.parametrize("images", [None, [], [{}] * 151])
+def test_upload_images_rejects_invalid_array_without_state_change(report, images):
+    state = report.create_report()
+    result, _ = call_tool(report, "upload_images", {
+        "images": images, "expected_image_revision": state["image_revision"],
+    })
+    assert result.is_error is True
+    assert "от 1 до 150" in result.content[0].text
+    assert report.get_report_state() == state
+
+
+def test_upload_images_continues_after_bad_source_and_signature(report):
+    state = report.create_report()
+    encoded = base64.b64encode(b"\x89PNG\r\n\x1a\n").decode()
+    result, payload = call_tool(report, "upload_images", {
+        "expected_image_revision": state["image_revision"], "images": [
+            {"filename": "both.png", "base64_data": encoded, "file_path": "unused.png"},
+            {"filename": "bad.png", "base64_data": "!!!"},
+            {"filename": "screen.bmp", "base64_data": base64.b64encode(b"BMpayload").decode()},
+            {"filename": "valid.png", "base64_data": encoded},
+        ],
+    })
+    assert result.is_error is False
+    assert [item["ok"] for item in payload["results"]] == [False, False, False, True]
+    assert payload["uploaded_count"] == 1
+    assert list(report.images) == ["valid.png"]
+
+
+def test_core_upload_images_checks_revisions_before_any_write(report):
+    state = report.create_report()
+    images = [{"filename": "one.png", "data": b"\x89PNG\r\n\x1a\n", "insert_into_report": True}]
+    with pytest.raises(ValueError, match="верси"):
+        report.upload_images(images, "stale", expected_revision=state["revision"])
+    with pytest.raises(ValueError, match="revision текста"):
+        report.upload_images(images, state["image_revision"])
+    assert report.get_report_state() == state
+
+
+def test_bmp_remains_unsupported(report):
+    state = report.create_report()
+    with pytest.raises(ValueError, match="поддерживаемое изображение"):
+        report.upload_image("screen.bmp", b"BMpayload", state["image_revision"])
+    assert report.get_report_state() == state
+
+
+def test_headless_manifest_registers_batch_and_both_image_sources():
+    from backend.app.headless import _tools
+    from backend.app.engine.headless_report import MAX_IMAGES_COUNT
+
+    schemas = {tool.name: tool.input_schema for tool in _tools()}
+    assert schemas["batch"]["properties"]["calls"]["maxItems"] == 20
+    assert schemas["upload_images"]["properties"]["images"]["maxItems"] == MAX_IMAGES_COUNT
+    for name in ("upload_image", "upload_images"):
+        assert "expected_image_revision" in schemas[name]["required"]
+    assert "file_path" in schemas["upload_image"]["properties"]
+    assert "base64_data" not in schemas["upload_image"]["required"]
+    assert "file_path" in schemas["upload_images"]["properties"]["images"]["items"]["properties"]

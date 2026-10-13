@@ -26,6 +26,7 @@ test_verify/
 # Reference & temporary images
 ref_*
 image_*
+!backend/app/engine/image_input.py
 
 # Environment and IDE
 .env

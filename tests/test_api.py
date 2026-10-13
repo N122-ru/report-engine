@@ -228,6 +228,32 @@ def test_generate_too_many_images_400():
     assert res.status_code == 400
     assert "максимальное количество" in res.json()["detail"]
 
+
+def test_image_limits_are_shared_between_http_sessions_and_headless():
+    from app.engine.security import MAX_IMAGE_SIZE as http_limit
+    from app.engine.sessions import MAX_IMAGE_SIZE as session_limit
+    from backend.app.engine.headless_report import MAX_IMAGE_SIZE as headless_limit
+
+    assert http_limit == session_limit == headless_limit == 15 * 1024 * 1024
+
+
+def test_generate_image_size_error_uses_actual_limit():
+    from app.engine.security import MAX_IMAGE_SIZE
+
+    response = client.post("/api/generate", data={"meta": "{}", "content": "Текст"}, files={
+        "images": ("screen.png", b"x" * (MAX_IMAGE_SIZE + 1), "image/png"),
+    })
+    assert response.status_code == 413
+    assert response.json()["detail"] == f"Размер файла «screen.png» превышает лимит {MAX_IMAGE_SIZE // (1024 * 1024)} МБ"
+
+
+def test_verify_docx_size_error_uses_separate_actual_limit():
+    from app.engine.security import MAX_VERIFY_SIZE
+
+    response = client.post("/api/verify", files={"file": ("report.docx", b"x" * (MAX_VERIFY_SIZE + 1))})
+    assert response.status_code == 413
+    assert response.json()["detail"] == f"Размер файла превышает лимит {MAX_VERIFY_SIZE // (1024 * 1024)} МБ"
+
 def test_autofix_size_limit_413():
     huge_content = "A" * (600 * 1024)
     res = client.post("/api/autofix", data={"content": huge_content})
@@ -252,5 +278,4 @@ def test_autofix_simplifies_robotic_status():
     assert "активен, обеспечивает" in fixed
     assert "среда передачи недоступна" in fixed
     assert any("состояния" in fix for fix in res.json()["fixes_applied"])
-
 

@@ -19,6 +19,9 @@ Own the FastAPI application that validates reports, generates DOCX/PDF files, se
 - Keep the backend and frontend implementations aligned where the same formatter or validation behavior is mirrored.
 - Validate the shared `report-engine-profile` format at the MCP boundary and apply it atomically under the current metadata revision.
 - Treat PDF as a runtime capability; DOCX generation must not depend on an office converter.
+- `app/engine/image_input.py` owns the shared 15 MiB image limit and 150-image count limit. HTTP, sessions, and headless re-export these constants; local MCP image paths use bounded reads and exactly one of `base64_data` or `file_path`.
+- `batch` preflights all 1–20 calls and rejects nesting before execution. Calls run sequentially without rollback; live batches containing mutations hold `session.mcp_write_lock` for the entire sequence, while read-only calls remain unlocked.
+- Live `upload_images` remains atomic; headless `upload_images` checks revisions once and returns ordered per-item errors while retaining valid uploads. Live file reads run through `asyncio.to_thread`, with revision rechecks before writes.
 
 ## Work Guidance
 

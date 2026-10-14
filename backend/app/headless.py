@@ -17,7 +17,10 @@ from .engine.image_input import IMAGE_SOURCE_SCHEMA, MAX_IMAGES_COUNT, load_imag
 from .engine.mcp_batch import BATCH_SCHEMA, resolve_batch_arguments, validate_batch_calls
 from .engine.pdf_converter import pdf_export_enabled
 from .engine.profile import load_profile_input
-from .engine.agent_resources import get_capabilities, read_agent_asset, read_reference, reference_resources
+from .engine.agent_resources import (
+    agent_onboarding_prompt, get_capabilities, read_agent_asset, read_reference,
+    reference_resources,
+)
 from .engine.report_safety import conflict_payload, is_conflict_message
 from .version import APP_VERSION
 
@@ -487,25 +490,50 @@ def _make_server(report: HeadlessReport) -> Server:
         raise ValueError("Ресурс не найден")
 
     async def list_prompts(_ctx: Any, _params: Any) -> types.ListPromptsResult:
-        return types.ListPromptsResult(prompts=[types.Prompt(
-            name="write_report",
-            description="Вести отчёт по ГОСТ через локальный headless MCP",
-            arguments=[types.PromptArgument(name="task", description="Задание пользователя")],
-        )])
+        return types.ListPromptsResult(prompts=[
+            types.Prompt(
+                name="write_report",
+                description="Вести отчёт по ГОСТ через локальный headless MCP",
+                arguments=[types.PromptArgument(name="task", description="Задание пользователя")],
+            ),
+            types.Prompt(
+                name="agent_onboarding",
+                description="Собрать локальную памятку клиента без записи на сервер",
+                arguments=[
+                    types.PromptArgument(
+                        name="client_agent", description="Название клиентского агента", required=True,
+                    ),
+                    types.PromptArgument(
+                        name="notes", description="Дополнительные особенности клиента", required=False,
+                    ),
+                ],
+            ),
+        ])
 
     async def get_prompt(_ctx: Any, params: types.GetPromptRequestParams) -> types.GetPromptResult:
-        task = (params.arguments or {}).get("task", "")
-        instructions = (
-            "Ты работаешь с локальным headless Report Engine без браузера. "
-            "Сначала вызови get_report_state; если отчёт ещё не создан, вызови create_report. "
-            "Для каждой записи используй свежую соответствующую revision. "
-            "После правок вызови lint_report, затем export_report только по явной задаче.\n\n"
-            + _skill_text()
-        )
-        if task:
-            instructions += f"\n\nЗадание пользователя: {task}"
+        arguments = params.arguments or {}
+        if params.name == "agent_onboarding":
+            instructions = agent_onboarding_prompt(
+                arguments.get("client_agent", ""), arguments.get("notes", ""),
+                include_file_path=True,
+            )
+            description = "Локальная памятка клиента Report Engine"
+        elif params.name == "write_report":
+            task = arguments.get("task", "")
+            instructions = (
+                "Ты работаешь с локальным headless Report Engine без браузера. "
+                "Сначала вызови get_report_state; если отчёт ещё не создан, вызови create_report. "
+                "Для каждой записи используй свежую соответствующую revision. "
+                "После правок вызови lint_report, затем export_report только по явной задаче.\n\n"
+                + _skill_text()
+            )
+            if task:
+                instructions += f"\n\nЗадание пользователя: {task}"
+            description = "Работа с отчётом в headless-режиме"
+        else:
+            raise ValueError("Промпт не найден")
         return types.GetPromptResult(
-            description="Работа с отчётом в headless-режиме",
+            description=description,
             messages=[types.PromptMessage(role="user", content=types.TextContent(text=instructions))],
         )
 

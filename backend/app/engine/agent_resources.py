@@ -1,5 +1,6 @@
 """Locate the canonical core and allowlisted references in source and frozen runtimes."""
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -8,7 +9,7 @@ from .pdf_converter import pdf_export_status
 from .report_safety import MAX_MARKDOWN_BYTES
 
 REFERENCE_NAMES = ("figures", "formulas", "tables", "style", "literals")
-CONTRACT_VERSION = "1.2"
+CONTRACT_VERSION = "1.3"
 LIVE_TOOL_NAMES = frozenset({
     "batch", "list_images", "get_image", "get_images", "upload_image", "upload_images",
     "update_image_layout", "get_report_state", "append_or_update_section", "patch_text",
@@ -54,6 +55,67 @@ def read_reference(uri: str) -> str:
     return read_agent_asset(f"reference/{name}.md")
 
 
+def resource_versions() -> list[dict[str, str | int]]:
+    """Return hashes and byte sizes for every cacheable agent resource."""
+    resources = [("report://rules/gost732", "SKILL.md")]
+    resources.extend(
+        (f"report://reference/{name}", f"reference/{name}.md")
+        for name in REFERENCE_NAMES
+    )
+    result = []
+    for uri, relative in resources:
+        content = read_agent_asset(relative).encode("utf-8")
+        result.append({
+            "uri": uri,
+            "sha256": hashlib.sha256(content).hexdigest()[:12],
+            "bytes": len(content),
+        })
+    return result
+
+
+def agent_onboarding_prompt(
+    client_agent: str, notes: str = "", *, include_file_path: bool = False,
+) -> str:
+    """Build a client-local onboarding dialogue without storing user answers."""
+    if not isinstance(client_agent, str) or not client_agent.strip():
+        raise ValueError("Параметр «client_agent» должен быть непустой строкой")
+    if not isinstance(notes, str):
+        raise ValueError("Параметр «notes» должен быть строкой")
+    note_block = (
+        f"\nПереданные пользователем заметки о клиенте (не выдумывай ответы): {notes.strip()}\n"
+        if notes.strip() else ""
+    )
+    file_path_shortcut = (
+        "- Используй file_path только если агент работает на одной машине с сервером или в standalone; "
+        "в web-режиме этот вариант не используй.\n"
+        if include_file_path else ""
+    )
+    return (
+        f"Клиентский агент «{client_agent.strip()}» сам задаёт пользователю вопросы в своём чате; "
+        "серверного ask_user нет и ответы пользователя нельзя выдумывать или записывать на сервер.\n"
+        "Сначала задай пользователю 4 вопроса:\n"
+        "1. Кто вы и для какой работы нужен Report Engine?\n"
+        "2. Где лежат исходники и фотографии, которые можно использовать?\n"
+        "3. Нужна ли финальная независимая проверка субагентом?\n"
+        "4. Нужен одноразовый (one-shot) сценарий или интерактивный режим?\n"
+        "После ответов подставь их в следующую локальную памятку. Не добавляй в неё "
+        "неподтверждённые сведения; сервер её не хранит.\n"
+        f"{note_block}\n"
+        "## Локальная памятка агента\n"
+        "### Назначение MCP у этого пользователя\n"
+        "[Кратко опиши назначение MCP на основе ответов пользователя.]\n\n"
+        "### Клиентские шорткаты\n"
+        "- Используй batch вместо серий одинаковых вызовов.\n"
+        "- Используй digest вместо полного state, когда полный текст не нужен.\n"
+        f"{file_path_shortcut}"
+        "- Передавай operation_id на мутациях от слабых клиентов.\n\n"
+        "### Правило приоритета источников\n"
+        "report://rules/gost732 ядро > report://reference/* > локальные шорткаты; "
+        "локальный скилл не переопределяет серверные правила.\n"
+        "локальный скилл — кэш: сверяй версии с get_capabilities"
+    )
+
+
 def get_capabilities(transport: str) -> dict:
     """Describe the application contract separately from MCP protocol capabilities."""
     own = LIVE_TOOL_NAMES if transport == "live" else HEADLESS_TOOL_NAMES
@@ -71,5 +133,6 @@ def get_capabilities(transport: str) -> dict:
         "limits": {"image_bytes": MAX_IMAGE_SIZE, "images_count": MAX_IMAGES_COUNT,
                    "markdown_bytes": MAX_MARKDOWN_BYTES},
         "reference_resources": [resource["uri"] for resource in reference_resources()],
+        "resources": resource_versions(),
         "tools_diff": tools_diff,
     }

@@ -70,6 +70,8 @@ standards compliance or institution-specific requirements.
   `formulas`, `tables`, `style`, and `literals` (files in `assets/reference/`).
   Agents ask users about uncertain/missing facts outside report prose, never insert
   uncertainty placeholders or silently alter numbers, IP addresses, hashes, or identifiers.
+  Both MCP transports expose `agent_onboarding`; it asks the client agent to question
+  the user natively and returns a local Markdown skill template without server storage.
 
 ### Additive MCP Safety Contract (1.1)
 
@@ -109,7 +111,7 @@ standards compliance or institution-specific requirements.
   `filename`, `format`, `size_bytes`, `sha256`, and `base64_data` without server disk
    persistence. Browser `/api/generate` remains the existing independent HTTP contract.
 
-### Unified MCP Contract (1.2)
+### Unified MCP Contract (1.3)
 
 - `get_report_state` and every successful mutation expose `revision`,
   `meta_revision`, `image_revision`, and `snapshot_id`. The latter is a SHA-256
@@ -130,6 +132,12 @@ standards compliance or institution-specific requirements.
   `get_capabilities.tools_diff` lists transport-specific tools. Live keeps
   browser block editors and base64 export; headless keeps report creation and
   output-directory export.
+- `get_capabilities.resources` lists the core and every reference as `{uri, sha256, bytes}`.
+  `sha256` is the first 12 hexadecimal characters of the UTF-8 resource content hash;
+  clients use it to validate cached local instructions.
+- `agent_onboarding` accepts required `client_agent` and optional `notes` arguments.
+  Its template prioritizes `report://rules/gost732`, then `report://reference/*`, then
+  client shortcuts; a local skill is a cache and cannot override server rules.
 
 ## Headless MCP and Portable Profiles
 

@@ -36,7 +36,10 @@ from .report_safety import (
     REVISION_FIELDS, add_content_guards, conflict_payload, is_conflict_message,
     report_digest, validate_detail, with_snapshot,
 )
-from .agent_resources import get_capabilities, read_agent_asset, read_reference, reference_resources
+from .agent_resources import (
+    agent_onboarding_prompt, get_capabilities, read_agent_asset, read_reference,
+    reference_resources,
+)
 from .pdf_converter import convert_docx_to_pdf
 from .security import PDF_SEMAPHORE
 from ..version import APP_VERSION
@@ -1685,6 +1688,14 @@ async def mcp_post_message(
                         "arguments": [
                             {"name": "task", "description": "Тема или задание работы", "required": False}
                         ]
+                    },
+                    {
+                        "name": "agent_onboarding",
+                        "description": "Собрать локальную памятку клиента без записи на сервер",
+                        "arguments": [
+                            {"name": "client_agent", "description": "Название клиентского агента", "required": True},
+                            {"name": "notes", "description": "Дополнительные особенности клиента", "required": False},
+                        ]
                     }
                 ]
             }
@@ -1692,27 +1703,62 @@ async def mcp_post_message(
 
     elif method == "prompts/get":
         prompt_name = params.get("name")
-        task_text = params.get("arguments", {}).get("task", "")
-        prompt_body = _load_skill_text() or (
-            "Ты — инженерный ассистент студента. Веди отчёт через get_report_state, "
-            "append_or_update_section и lint_report в безличном стиле."
-        )
-        if task_text:
-            prompt_body += f"\nЗадание пользователя: {task_text}"
-
-        response_payload = {
-            "jsonrpc": "2.0",
-            "id": req_id,
-            "result": {
-                "description": "Оформление отчёта по ГОСТ 7.32",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": {"type": "text", "text": prompt_body}
-                    }
-                ]
+        arguments = params.get("arguments", {})
+        if not isinstance(arguments, dict):
+            response_payload = {
+                "jsonrpc": "2.0", "id": req_id,
+                "error": {"code": -32602, "message": "Аргументы промпта должны быть объектом"},
             }
-        }
+        elif prompt_name == "agent_onboarding":
+            try:
+                prompt_body = agent_onboarding_prompt(
+                    arguments.get("client_agent", ""), arguments.get("notes", ""),
+                    include_file_path=False,
+                )
+            except (TypeError, ValueError) as exc:
+                response_payload = {
+                    "jsonrpc": "2.0", "id": req_id,
+                    "error": {"code": -32602, "message": str(exc)},
+                }
+            else:
+                response_payload = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {
+                        "description": "Локальная памятка клиента Report Engine",
+                        "messages": [{
+                            "role": "user",
+                            "content": {"type": "text", "text": prompt_body},
+                        }],
+                    },
+                }
+        elif prompt_name == "write_report":
+            task_text = arguments.get("task", "")
+            prompt_body = _load_skill_text() or (
+                "Ты — инженерный ассистент студента. Веди отчёт через get_report_state, "
+                "append_or_update_section и lint_report в безличном стиле."
+            )
+            if task_text:
+                prompt_body += f"\nЗадание пользователя: {task_text}"
+
+            response_payload = {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "description": "Оформление отчёта по ГОСТ 7.32",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": {"type": "text", "text": prompt_body}
+                        }
+                    ]
+                }
+            }
+        else:
+            response_payload = {
+                "jsonrpc": "2.0", "id": req_id,
+                "error": {"code": -32602, "message": "Промпт не найден"},
+            }
 
     elif method == "resources/list":
         resources_list = [

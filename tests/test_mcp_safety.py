@@ -199,6 +199,20 @@ def test_capabilities_advertise_runtime_and_limits(transport):
     assert caps["file_path"] is True
     assert caps["limits"] == {"image_bytes": 15 * 1024 * 1024, "images_count": 150, "markdown_bytes": 500 * 1024}
     assert set(caps["reference_resources"]) == {f"report://reference/{name}" for name in ("figures", "formulas", "tables", "style", "literals")}
+    expected_resources = {
+        "report://rules/gost732": "assets/SKILL.md",
+        **{f"report://reference/{name}": f"assets/reference/{name}.md"
+           for name in ("figures", "formulas", "tables", "style", "literals")},
+    }
+    resources = {resource["uri"]: resource for resource in caps["resources"]}
+    assert set(resources) == set(expected_resources)
+    for uri, path in expected_resources.items():
+        data = open(path, "r", encoding="utf-8").read().strip().encode("utf-8")
+        assert resources[uri] == {
+            "uri": uri,
+            "sha256": hashlib.sha256(data).hexdigest()[:12],
+            "bytes": len(data),
+        }
 
 
 def test_noop_metadata_retains_verification_and_invalid_detail_is_rejected(transport):
@@ -258,6 +272,26 @@ async def test_layered_resources_and_core_prompt_in_both_transports(transport):
         assert all(reference not in text for reference in expected.values())
         assert all(uri in text for uri in expected)
 
+        prompts = await request("prompts/list", {})
+        assert {item["name"] for item in prompts["prompts"]} >= {"write_report", "agent_onboarding"}
+        onboarding = await request("prompts/get", {
+            "name": "agent_onboarding",
+            "arguments": {"client_agent": "Hermes", "notes": "Локальный профиль клиента"},
+        })
+        onboarding_text = onboarding["messages"][0]["content"]["text"]
+        assert "Hermes" in onboarding_text
+        assert "где лежат исходники и фотографии" in onboarding_text.lower()
+        assert "независимая проверка" in onboarding_text
+        assert "одноразовый" in onboarding_text.lower()
+        assert "интерактивный" in onboarding_text.lower()
+        assert "## Локальная памятка агента" in onboarding_text
+        assert "report://rules/gost732" in onboarding_text
+        assert "ядро >" in onboarding_text
+        assert "не переопределяет серверные правила" in onboarding_text
+        assert "локальный скилл — кэш: сверяй версии с get_capabilities" in onboarding_text
+        assert "не хранит" in onboarding_text
+        assert ("file_path" in onboarding_text) == (name == "headless")
+
     if name == "live":
         async def request(method, params):
             response = client.post(f"/api/mcp/messages?token={token}", json={
@@ -285,6 +319,8 @@ async def test_layered_resources_and_core_prompt_in_both_transports(transport):
                             result = await session.list_resources()
                         elif method == "resources/read":
                             result = await session.read_resource(params["uri"])
+                        elif method == "prompts/list":
+                            result = await session.list_prompts()
                         else:
                             result = await session.get_prompt(params["name"], params["arguments"])
                         return result.model_dump(mode="json", by_alias=True)

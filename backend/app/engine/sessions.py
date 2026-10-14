@@ -21,6 +21,7 @@ from typing import Dict, List, Optional, Set, Any
 
 from .markdown_parser import _image_size
 from .image_input import MAX_IMAGE_SIZE, MAX_IMAGES_COUNT
+from .report_safety import ReportVerification
 
 MAX_INACTIVE_HOURS = 48
 
@@ -57,6 +58,7 @@ class SessionData:
         self.last_active: float = time.time()
         self.listeners: Set[asyncio.Queue] = set()
         self.edit_history: deque[dict] = deque(maxlen=20)
+        self.verification = ReportVerification()
         # MCP reads may run concurrently, but mutations for one session must
         # observe revisions in order and never overwrite one another.
         self.mcp_write_lock = asyncio.Lock()
@@ -126,6 +128,7 @@ class SessionData:
         self.images[safe_name] = data
         self.image_hashes[safe_name] = hashlib.sha256(data).hexdigest()
         self.deleted_images.discard(safe_name)
+        self.verification.changed()
         self.touch()
         return safe_name
 
@@ -141,6 +144,7 @@ class SessionData:
         if removed:
             self.image_hashes.pop(safe_name, None)
             self.deleted_images.add(safe_name)
+            self.verification.changed()
             self.touch()
         return removed
 
@@ -248,6 +252,7 @@ class SessionManager:
             )),
         })
         session.content = content
+        session.verification.changed()
         session.touch()
         before_revision = hashlib.sha256(before.encode("utf-8")).hexdigest()
         after_revision = session.revision
@@ -282,6 +287,7 @@ class SessionManager:
         before_meta = session.meta
         before_meta_revision = session.meta_revision
         session.meta = meta
+        session.verification.changed()
         session.touch()
         changed = {key: value for key, value in meta.items() if before_meta.get(key) != value}
         removed = [key for key in before_meta if key not in meta]

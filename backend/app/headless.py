@@ -17,6 +17,7 @@ from .engine.image_input import IMAGE_SOURCE_SCHEMA, MAX_IMAGES_COUNT, load_imag
 from .engine.mcp_batch import BATCH_SCHEMA, validate_batch_calls
 from .engine.pdf_converter import pdf_export_enabled
 from .engine.profile import load_profile_input
+from .engine.agent_resources import get_capabilities, read_agent_asset, read_reference, reference_resources
 from .version import APP_VERSION
 
 
@@ -26,8 +27,8 @@ SKILL_PATH = Path(__file__).resolve().parents[2] / "assets" / "SKILL.md"
 
 def _skill_text() -> str:
     try:
-        return SKILL_PATH.read_text(encoding="utf-8").strip()
-    except OSError:
+        return read_agent_asset("SKILL.md")
+    except (OSError, ValueError):
         return "# Report Engine\nСледуй правилам ГОСТ 7.32 и проверяй отчёт через lint_report."
 
 
@@ -112,8 +113,10 @@ def _tools() -> list[types.Tool]:
         _tool(
             "get_report_state",
             "Получить Markdown, реквизиты, изображения и три текущие версии отчёта.",
-            {},
+            {"detail": {"type": "string", "enum": ["full", "digest"], "default": "full"}},
         ),
+        _tool("get_capabilities", "Получить возможности транспорта, лимиты и справочники.", {}),
+        _tool("review_snapshot", "Получить отчёт и lint для ревью без байтов изображений и изменения состояния.", {}),
         _tool(
             "list_images",
             "Получить список прикреплённых изображений и их SHA-256.",
@@ -201,6 +204,7 @@ def _tools() -> list[types.Tool]:
             "expected_revision": revision,
             "expected_meta_revision": revision,
             "expected_image_revision": revision,
+            "confirm_blocked_export": {"type": "boolean", "default": False},
         },
         ["filename", "expected_revision", "expected_meta_revision", "expected_image_revision"],
     ))
@@ -222,6 +226,7 @@ def _resources(report: HeadlessReport) -> list[types.Resource]:
             mimeType="text/markdown",
         ),
     ]
+    result.extend(types.Resource(**resource) for resource in reference_resources())
     try:
         for image in report.list_images():
             result.append(types.Resource(
@@ -262,7 +267,11 @@ def _dispatch_tool(report: HeadlessReport, name: str, args: dict[str, Any]) -> t
                 raise ValueError("Параметр «expected_meta_revision» должен быть строкой")
             return _text_result(report.import_profile(load_profile_input(args), expected))
         if name == "get_report_state":
-            return _text_result(report.get_report_state())
+            return _text_result(report.get_report_state(args.get("detail", "full")))
+        if name == "get_capabilities":
+            return _text_result(get_capabilities("headless"))
+        if name == "review_snapshot":
+            return _text_result(report.review_snapshot())
         if name == "list_images":
             return _text_result({"images": report.list_images()})
         if name == "get_image":
@@ -320,6 +329,7 @@ def _dispatch_tool(report: HeadlessReport, name: str, args: dict[str, Any]) -> t
                 _string(args, "filename"), _string(args, "expected_revision"),
                 _string(args, "expected_meta_revision"), _string(args, "expected_image_revision"),
                 args.get("format") if isinstance(args.get("format"), str) else None,
+                args.get("confirm_blocked_export", False),
             ))
         raise ValueError(f"Неизвестный инструмент: {name}")
     except (TypeError, ValueError, OSError, RuntimeError) as exc:
@@ -338,6 +348,10 @@ def _make_server(report: HeadlessReport) -> Server:
 
     async def read_resource(_ctx: Any, params: types.ReadResourceRequestParams) -> types.ReadResourceResult:
         uri = params.uri
+        if uri.startswith("report://reference/"):
+            return types.ReadResourceResult(contents=[types.TextResourceContents(
+                uri=uri, mimeType="text/markdown", text=read_reference(uri),
+            )])
         if uri == "report://rules/gost732":
             return types.ReadResourceResult(contents=[types.TextResourceContents(
                 uri=uri, mimeType="text/markdown", text=_skill_text(),

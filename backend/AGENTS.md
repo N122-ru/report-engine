@@ -22,6 +22,10 @@ Own the FastAPI application that validates reports, generates DOCX/PDF files, se
 - `app/engine/image_input.py` owns the shared 15 MiB image limit and 150-image count limit. HTTP, sessions, and headless re-export these constants; local MCP image paths use bounded reads and exactly one of `base64_data` or `file_path`.
 - `batch` preflights all 1–20 calls and rejects nesting before execution. Calls run sequentially without rollback; live batches containing mutations hold `session.mcp_write_lock` for the entire sequence, while read-only calls remain unlocked.
 - Live `upload_images` remains atomic; headless `upload_images` checks revisions once and returns ordered per-item errors while retaining valid uploads. Live file reads run through `asyncio.to_thread`, with revision rechecks before writes.
+- `report_safety.py` owns stateless prose guards, digest data, and verification state shared by both MCP transports. Every actual text/metadata/image mutation invalidates lint, including browser writes and rollback; no-op writes do not.
+- MCP export requires a completed lint of the current report. Only literal `confirm_blocked_export: true` bypasses critical placeholders/missing-image blockers, never the lint phase. `review_snapshot` and alternate-text lint do not advance the phase.
+- Live `export_report` returns document bytes as base64 without server persistence; headless retains exclusive file creation in its configured output directory. The independent browser HTTP generation contract is unchanged.
+- `agent_resources.py` serves the canonical core and five allowlisted references in source/frozen runtimes. `get_capabilities` describes these resources and runtime limits; `write_report` embeds only the core.
 
 ## Work Guidance
 

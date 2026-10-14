@@ -32,6 +32,10 @@ from .block_editor import blocks, edit_block, move_figure
 from .profile import load_profile_input, profile_metadata
 from .image_input import IMAGE_SOURCE_SCHEMA, load_image_input
 from .mcp_batch import BATCH_SCHEMA, validate_batch_calls
+from .report_safety import add_content_guards, report_digest, validate_detail
+from .agent_resources import get_capabilities, read_agent_asset, read_reference, reference_resources
+from .pdf_converter import convert_docx_to_pdf
+from .security import PDF_SEMAPHORE
 from ..version import APP_VERSION
 
 router = APIRouter()
@@ -42,20 +46,10 @@ _mcp_connections: Dict[str, asyncio.Queue] = {}
 
 def _load_skill_text() -> str:
     """Load canonical agent instructions from assets/SKILL.md."""
-    candidates = [
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "assets", "SKILL.md")),
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "assets", "SKILL.md")),
-        os.path.abspath("assets/SKILL.md"),
-        os.path.abspath("SKILL.md"),
-    ]
-    for path in candidates:
-        try:
-            if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as f:
-                    return f.read().strip()
-        except Exception:
-            continue
-    return ""
+    try:
+        return read_agent_asset("SKILL.md")
+    except (OSError, ValueError):
+        return ""
 
 
 def _decode_image_data(encoded: str, filename: str) -> bytes:
@@ -248,7 +242,7 @@ MCP_LIVE_TOOLS = [
         ),
         "inputSchema": {
             "type": "object",
-            "properties": {}
+            "properties": {"detail": {"type": "string", "enum": ["full", "digest"], "default": "full"}}
         }
     },
     {
@@ -503,7 +497,31 @@ MCP_LIVE_TOOLS = [
                 "expected_image_revision": {"type": "string"}
             }
         }
-    }
+    },
+    {
+        "name": "get_capabilities",
+        "description": "Возвращает транспорт, версию контракта, PDF, лимиты и доступные справочники.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "review_snapshot",
+        "description": "Возвращает отчёт, манифест без байтов изображений, ревизии и lint для внешнего ревью; не меняет фазу проверки.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "export_report",
+        "description": "Возвращает DOCX/PDF как base64 без записи на диск. Требует lint после последней правки; заглушки требуют явного подтверждения.",
+        "inputSchema": {
+            "type": "object", "required": ["expected_revision", "expected_meta_revision", "expected_image_revision"],
+            "properties": {
+                "filename": {"type": "string", "default": "report.docx"},
+                "format": {"type": "string", "enum": ["docx", "pdf"], "default": "docx"},
+                "expected_revision": {"type": "string"}, "expected_meta_revision": {"type": "string"},
+                "expected_image_revision": {"type": "string"},
+                "confirm_blocked_export": {"type": "boolean", "default": False},
+            },
+        },
+    },
 ]
 
 MCP_TOOL_PAGE_SIZE = 10
@@ -578,6 +596,20 @@ def _mcp_tools_page(cursor: Any) -> Dict[str, Any]:
 # Tool handlers operate on the selected user session.
 # ==============================================================================
 
+def _session_revisions(session: SessionData) -> Dict[str, str]:
+    """Capture all report parts participating in verification and export."""
+    return {"revision": session.revision, "meta_revision": session.meta_revision,
+            "image_revision": session.image_revision}
+
+
+def _review_snapshot(session: SessionData, lint: Dict[str, Any]) -> Dict[str, Any]:
+    """Package a read-only review without granting the mandatory lint phase."""
+    revisions = _session_revisions(session)
+    return {"markdown_content": session.content, "metadata": session.meta,
+            "images": session.list_images(), **revisions,
+            "verify_state": session.verification.state(revisions), "lint": lint}
+
+
 async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: SessionData) -> Any:
     """Dispatch tools without locking so a batch can hold one lock across all calls."""
     if tool_name == "batch":
@@ -593,6 +625,9 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
                 if args.get("stop_on_error", False):
                     break
         return results
+
+    elif tool_name == "get_capabilities":
+        return get_capabilities("live")
 
     elif tool_name == "list_images":
         images = session.list_images()
@@ -759,6 +794,12 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
                 "filenames": [name for name, _ in staged]}
 
     elif tool_name == "get_report_state":
+        detail = args.get("detail", "full")
+        validate_detail(detail)
+        revisions = _session_revisions(session)
+        common = {**revisions, "verify_state": session.verification.state(revisions)}
+        if detail == "digest":
+            return common | report_digest(session.content, session.images)
         return {
             "token": session.token,
             "markdown_content": session.content,
@@ -768,7 +809,33 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
             "headings": [s.heading for s in sections(session.content)],
             "metadata": session.meta,
             "last_active": session.last_active
-        }
+        } | common
+
+    elif tool_name == "export_report":
+        revisions = _session_revisions(session)
+        if any(args.get(f"expected_{key}") != value for key, value in revisions.items()):
+            raise ValueError("Конфликт версий: получите актуальное состояние отчёта")
+        confirm = args.get("confirm_blocked_export", False)
+        session.verification.require_export(revisions, confirm)
+        output_format = args.get("format", "docx")
+        if output_format not in ("docx", "pdf"):
+            raise ValueError("Формат должен быть docx или pdf")
+        filename = args.get("filename", f"report.{output_format}")
+        if (not isinstance(filename, str) or not filename or len(filename) > 128
+                or filename.startswith(".") or filename != filename.strip()
+                or re.search(r'[\\/:*?"<>|\x00-\x1f]', filename)
+                or not filename.lower().endswith(f".{output_format}")):
+            raise ValueError("Укажите безопасное имя файла с соответствующим расширением")
+        data = build_docx_report(ReportMetadata(**session.meta), session.content, session.images).getvalue()
+        if output_format == "pdf":
+            async with PDF_SEMAPHORE:
+                data = convert_docx_to_pdf(data).getvalue()
+            # A browser update can occur while waiting for the PDF slot.
+            session.verification.require_export(revisions, confirm)
+            if revisions != _session_revisions(session):
+                raise ValueError("Отчёт изменился во время экспорта; сначала проверь отчёт заново")
+        return {"filename": filename, "format": output_format, "size_bytes": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(), "base64_data": base64.b64encode(data).decode("ascii")}
 
     elif tool_name == "get_document_outline":
         rev = session.revision
@@ -1058,10 +1125,18 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
             name for name in safe_names if name not in deleted
         ]}
 
-    elif tool_name == "lint_report":
+    elif tool_name in ("lint_report", "review_snapshot"):
         text_to_check = args.get("markdown_content") or session.content
+        if tool_name == "review_snapshot":
+            text_to_check = session.content
+        if not isinstance(text_to_check, str) or len(text_to_check.encode("utf-8")) > MAX_MARKDOWN_SIZE:
+            raise ValueError("Размер текста отчёта превышает допустимый лимит (500 КБ)")
         if not text_to_check.strip():
-            return {"is_valid": False, "status": "invalid", "score": 0, "errors": [{"message": "Текст пуст"}], "warnings": []}
+            result = add_content_guards({"is_valid": False, "status": "invalid", "score": 0,
+                                        "errors": [{"message": "Текст пуст"}], "warnings": []}, text_to_check, session.images)
+            if tool_name == "lint_report" and text_to_check == session.content:
+                session.verification.record_lint(_session_revisions(session), result)
+            return _review_snapshot(session, result) if tool_name == "review_snapshot" else result
 
         meta_obj = ReportMetadata(**session.meta) if session.meta else ReportMetadata()
         docx_buffer = build_docx_report(
@@ -1112,14 +1187,17 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         metrics = res.metrics.model_dump()
         metrics["tasks_count"] = tasks_count
         metrics["attached_images_count"] = len(session.images)
-        return {
+        result = add_content_guards({
             "is_valid": res.is_valid,
             "status": "needs_review" if extra_warnings and res.status == "ready" else res.status,
             "score": max(0, res.score - 4 * len(extra_warnings)),
             "errors": [e.model_dump() for e in res.errors],
             "warnings": [w.model_dump() for w in res.warnings] + extra_warnings,
             "metrics": metrics
-        }
+        }, text_to_check, session.images)
+        if tool_name == "lint_report" and text_to_check == session.content:
+            session.verification.record_lint(_session_revisions(session), result)
+        return _review_snapshot(session, result) if tool_name == "review_snapshot" else result
 
     elif tool_name == "autofix_typography":
         if args.get("expected_revision") != session.revision:
@@ -1562,10 +1640,11 @@ async def mcp_post_message(
             {
                 "uri": "report://rules/gost732",
                 "name": "Инструкция агента (SKILL.md)",
-                "description": "Полные правила ведения отчёта: порядок работы, стиль, рисунки, формулы, таблицы",
+                "description": "Ядро ведения отчёта и указатели на тематические справочники",
                 "mimeType": "text/markdown"
             }
         ]
+        resources_list.extend(reference_resources())
         for img in session.list_images():
             resources_list.append({
                 "uri": f"report://image/{session.token}/{img['filename']}",
@@ -1584,7 +1663,15 @@ async def mcp_post_message(
 
     elif method == "resources/read":
         uri = params.get("uri", "")
-        if (
+        if uri.startswith("report://reference/"):
+            try:
+                content_text = read_reference(uri)
+                response_payload = {"jsonrpc": "2.0", "id": req_id, "result": {
+                    "contents": [{"uri": uri, "mimeType": "text/markdown", "text": content_text}]}}
+            except (ValueError, OSError) as exc:
+                response_payload = {"jsonrpc": "2.0", "id": req_id,
+                                    "error": {"code": -32602, "message": str(exc)}}
+        elif (
             uri.startswith(f"report://image/{session.token}/")
             or uri.startswith(f"report://image/{token}/")
         ):

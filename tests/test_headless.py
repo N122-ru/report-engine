@@ -29,6 +29,7 @@ def add_section(report, heading, content):
 
 
 def export(report, filename):
+    report.lint_report()
     state = report.get_report_state()
     return report.export_report(
         filename, state["revision"], state["meta_revision"], state["image_revision"]
@@ -239,6 +240,7 @@ def test_output_directory_must_already_exist(tmp_path):
 def test_pdf_export_requires_a_local_converter(report, monkeypatch):
     monkeypatch.setenv("REPORT_ENGINE_DISABLE_PDF", "1")
     report.create_report()
+    report.lint_report()
     state = report.get_report_state()
     with pytest.raises(RuntimeError, match="PDF недоступен"):
         report.export_report(
@@ -310,6 +312,7 @@ def test_batch_allows_export_and_preserves_image_content(report, tmp_path):
     state = report.get_report_state()
     result, payload = call_tool(report, "batch", {"calls": [
         {"name": "get_image", "arguments": {"filename": "screen.png"}},
+        {"name": "lint_report", "arguments": {}},
         {"name": "export_report", "arguments": {
             "filename": "report.docx", **{f"expected_{key}": state[key] for key in (
                 "revision", "meta_revision", "image_revision",
@@ -319,7 +322,8 @@ def test_batch_allows_export_and_preserves_image_content(report, tmp_path):
     assert result.is_error is False
     assert all(item["ok"] for item in payload)
     assert base64.b64decode(payload[0]["result"]["content"][0]["data"]) == sample
-    assert payload[1]["result"]["path"] == str(tmp_path / "report.docx")
+    assert "score" in payload[1]["result"]
+    assert payload[2]["result"]["path"] == str(tmp_path / "report.docx")
     assert (tmp_path / "report.docx").is_file()
 
 

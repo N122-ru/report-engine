@@ -16,7 +16,8 @@ Own native standalone release assembly for the headless and web products.
 - Build natively on the target operating system and architecture; never claim cross-platform output from one PyInstaller run.
 - Release packages must not copy LibreOffice, OnlyOffice, or system fonts for document rendering; the absence of these files is documented in each package. The web SPA retains its bundled KaTeX browser fonts.
 - PDF is a runtime capability detected by the application; missing converters must leave DOCX export available.
-- Bundle all `docx/templates` and JSON Schema resources, `latex2mathml/unimathsymbols.txt`, `assets/SKILL.md`, `assets/default_logo.png`, and `VERSION`; the web product additionally requires every file in `frontend/dist`.
+- Bundle all `docx/templates` and JSON Schema resources, `latex2mathml/unimathsymbols.txt`, `assets/SKILL.md`, all five `assets/reference/*.md` domain files, `assets/default_logo.png`, and `VERSION`; the web product additionally requires every file in `frontend/dist`.
+- The independent required-data inventory must name each reference file and reject missing/corrupted frozen copies for both products; bundle `assets/reference/` explicitly with PyInstaller.
 - Verify required frozen `_internal` data byte-for-byte against build inputs before package assembly. Do not depend only on PyInstaller import discovery for package data.
 - Collect `docx` sources as well as templates: runtime paths traverse `docx/parts/../templates`, so the physical `parts` directory must survive packaging.
 - Do not place generated packages, binaries, or vendor runtimes in the repository.

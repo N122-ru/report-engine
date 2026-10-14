@@ -47,6 +47,7 @@ def test_pyinstaller_collects_docx_templates_and_runtime_assets(product, tmp_pat
     assert command[command.index("--contents-directory") + 1] == "_internal"
     additions = [command[index + 1] for index, arg in enumerate(command) if arg == "--add-data"]
     assert any("default_logo.png" in value for value in additions)
+    assert any("assets/reference" in value.replace("\\", "/") for value in additions)
     required = {relative.as_posix() for _, relative in _required_runtime_data(product)}
     assert {
         "docx/parts/__init__.py",
@@ -57,6 +58,7 @@ def test_pyinstaller_collects_docx_templates_and_runtime_assets(product, tmp_pat
         "latex2mathml/unimathsymbols.txt",
         "jsonschema_specifications/schemas/draft202012/metaschema.json",
     } <= required
+    assert {f"assets/reference/{name}.md" for name in ("figures", "formulas", "tables", "style", "literals")} <= required
     assert ("frontend/dist/index.html" in required) == (product == "web")
 
 
@@ -73,6 +75,8 @@ def test_complete_frozen_bundle_passes_data_verification(product, frozen_bundle)
     "assets/SKILL.md", "assets/default_logo.png", "VERSION",
     "latex2mathml/unimathsymbols.txt", "frontend/dist/index.html",
     "jsonschema_specifications/schemas/draft202012/metaschema.json",
+    "assets/reference/figures.md", "assets/reference/formulas.md", "assets/reference/tables.md",
+    "assets/reference/style.md", "assets/reference/literals.md",
 ])
 def test_incomplete_frozen_bundle_is_rejected(relative, frozen_bundle):
     (frozen_bundle / "_internal" / relative).unlink()
@@ -82,6 +86,12 @@ def test_incomplete_frozen_bundle_is_rejected(relative, frozen_bundle):
 
 def test_corrupted_frozen_bundle_is_rejected(frozen_bundle):
     (frozen_bundle / "_internal/assets/SKILL.md").write_text("truncated", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="Bundled data differs"):
+        _verify_bundle_data(frozen_bundle, "headless")
+
+
+def test_corrupted_reference_is_rejected(frozen_bundle):
+    (frozen_bundle / "_internal/assets/reference/figures.md").write_text("truncated", encoding="utf-8")
     with pytest.raises(RuntimeError, match="Bundled data differs"):
         _verify_bundle_data(frozen_bundle, "headless")
 

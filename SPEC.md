@@ -65,7 +65,48 @@ standards compliance or institution-specific requirements.
   update metadata/image layouts, inspect recent edits, roll back the last agent edit,
   lint, and fix typography. Writes must not silently overwrite adjacent sections.
 - `assets/SKILL.md`, exposed as `report://rules/gost732` and through MCP prompts,
-  is the canonical report-agent guidance. Agents read it and current state before editing.
+  is the compact canonical report-agent core. `write_report` embeds only this core;
+  domain references are loaded on demand from `report://reference/figures`,
+  `formulas`, `tables`, `style`, and `literals` (files in `assets/reference/`).
+  Agents ask users about uncertain/missing facts outside report prose, never insert
+  uncertainty placeholders or silently alter numbers, IP addresses, hashes, or identifiers.
+
+### Additive MCP Safety Contract (1.1)
+
+- Both transports expose `get_capabilities` without arguments: `transport`
+  (`live` or `headless`), `contract_version`, runtime `pdf_export`/`pdf_converter`,
+  `file_path: true`, `limits` (`image_bytes: 15728640`, `images_count: 150`,
+  `markdown_bytes: 512000`), and `reference_resources` (the five reference URIs).
+- `get_report_state` retains its default response and adds `verify_state` with
+  `lint_after_last_change` and `export_allowed` booleans. Optional `detail: "digest"`
+  returns only `sections` (`heading`, `word_count` for the section body including
+  descendants), `image_refs` (`filename`, `status: attached|missing`, `location`),
+  the three revisions, and `verify_state`; it omits Markdown and metadata.
+  External image URLs retain legacy handling and are classified as attached.
+- `lint_report` adds `unresolved_items` (`id`, `kind`, Russian `message`, `location`)
+  and `export_blockers`, its critical subset. Stateless Markdown guards detect
+  missing-data placeholders, internal prose paths, explicit preparation notes,
+  and missing local image references, excluding fenced/inline code and link targets.
+  Legitimate references such as "на рисунке 4.2" are not preparation notes.
+  Kinds are `placeholder`, `internal_path`, `preparation_note`, `missing_image`;
+  only placeholders and missing attachments block export. Legacy `is_valid`
+  remains the absence of DOCX errors, not strict export readiness.
+- `review_snapshot` is read-only: `markdown_content`, `metadata`, `images` manifest
+  (filenames, sizes, SHA-256, `is_in_report`, no attachment base64), all revisions,
+  `verify_state`, and freshly computed `lint`. It does not grant the export phase.
+- Successful completion of `lint_report` on the current report is required after
+  every actual text/metadata/image mutation, including browser updates and rollback.
+  A lint with warnings still completes this phase; an exception or lint of other
+  Markdown does not. No-op writes retain verification. `export_allowed` means
+  current lint exists and its `export_blockers` is empty.
+- `export_report` requires all three fresh `expected_*` revisions. Stale verification
+  produces a Russian "сначала проверь отчёт" error. Nonempty blockers produce an
+  error listing items; only literal boolean `confirm_blocked_export: true` bypasses
+  these blockers, never the mandatory post-mutation lint. Confirmation is not sticky.
+  Headless retains its existing filename/output-directory result. New live export
+  accepts `format: docx|pdf` (default docx) and optional simple `filename`; it returns
+  `filename`, `format`, `size_bytes`, `sha256`, and `base64_data` without server disk
+  persistence. Browser `/api/generate` remains the existing independent HTTP contract.
 
 ## Headless MCP and Portable Profiles
 
@@ -154,6 +195,7 @@ creates its default `output` directory.
 | `create_report` | Create one RAM draft; never silently reset an existing report. |
 | `import_profile` | Accept `profile` object or local `file_path`, not both; validate `report-engine-profile` version 1 and size limits before applying. Create a draft if absent; otherwise require fresh `expected_meta_revision`. |
 | `get_report_state` | Return Markdown, metadata, image manifest, `revision`, `meta_revision`, and `image_revision`. |
+| `get_capabilities`, `review_snapshot` | Return runtime/limits/reference discovery or a read-only transferable review with lint; see the shared safety contract. |
 | `list_images`, `get_image` | Read media/manifest; return native MCP image content for vision. |
 | `upload_image`, `delete_image` | Require fresh image revision, reject duplicate names and invalid bytes; deletion rejects referenced images. Inserting an image into text also requires text revision. |
 | `upload_images` | Upload 1–150 images with one image revision check and per-item results; valid items survive other items' errors. |
@@ -161,7 +203,7 @@ creates its default `output` directory.
 | `append_or_update_section` | Add or replace the body of an unambiguous heading using fresh text revision; retain adjacent sections. |
 | `update_meta` | Apply supplied fields using fresh metadata revision. |
 | `lint_report`, `autofix_typography` | Validate generated DOCX in RAM; typography writes require fresh text revision. |
-| `export_report` | Explicitly write a new DOCX/PDF with all three fresh revisions into the configured output directory. |
+| `export_report` | Explicitly write a new DOCX/PDF with all three fresh revisions into the configured output directory after current lint; critical blockers require `confirm_blocked_export: true`. |
 
 - State and image bytes remain in RAM until process exit. No automatic draft persistence.
 - Export accepts only a simple safe filename, rejects traversal/symlink targets
@@ -173,7 +215,9 @@ creates its default `output` directory.
   base64 image data URLs (decoded logo at most 2 MiB), not filesystem paths;
   the existing 500 KiB metadata limit also applies.
 - Resources include `report://rules/gost732`, `report://document/current`, and
-  attached images; the canonical rules also accompany the report-writing prompt.
+  attached images plus all five `report://reference/*` resources; only core rules
+  accompany the report-writing prompt. Native packages inventory and byte-verify
+  each reference file independently of PyInstaller discovery.
 - DOCX needs no office suite. `export_report` advertises PDF only when a local
   converter passes a version probe; PDF is not a separate tool or bundled runtime.
 

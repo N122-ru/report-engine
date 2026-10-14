@@ -9,6 +9,7 @@ Own regression tests for the backend API, report generation, normocontrol, MCP s
 - `test_api.py` covers HTTP API behavior.
 - `test_gost_normocontrol.py` covers generated-document formatting and validation.
 - `test_mcp_sessions.py` covers session and MCP behavior.
+- `test_mcp_safety.py` covers guards, export phases/blockers, capabilities, digest, read-only review snapshots, and layered resource/prompt parity across live and headless MCP.
 - `test_headless.py`, `test_standalone_web.py`, and `test_packaging.py` cover standalone runtimes and native package assembly.
 - The root and backend/frontend AGENTS.md files own implementation contracts.
 

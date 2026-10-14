@@ -331,6 +331,7 @@ def test_mcp_tools_list_keeps_core_on_first_page_and_paginates_the_rest():
         "get_last_edit", "get_edit_history", "rollback_last_edit", "lint_report",
         "autofix_typography", "update_meta", "delete_image", "delete_images", "import_profile",
         "batch",
+        "get_capabilities", "review_snapshot", "export_report",
     }
 
 

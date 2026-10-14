@@ -21,6 +21,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS_ROOT = ROOT / "release_tools"
 SKILL_FILE = ROOT / "assets" / "SKILL.md"
+REFERENCE_DIR = ROOT / "assets" / "reference"
+REFERENCE_NAMES = ("figures", "formulas", "tables", "style", "literals")
 LOGO_FILE = ROOT / "assets" / "default_logo.png"
 FRONTEND_DIST = ROOT / "frontend" / "dist"
 LATEX_DATA_PACKAGE = "latex2mathml"
@@ -90,6 +92,8 @@ def _required_runtime_data(product: str) -> list[tuple[Path, Path]]:
         (ROOT / "VERSION", Path("VERSION")),
         (_latex_symbols_file(), Path(LATEX_DATA_PACKAGE) / "unimathsymbols.txt"),
     ]
+    data.extend((REFERENCE_DIR / f"{name}.md", Path(f"assets/reference/{name}.md"))
+                for name in REFERENCE_NAMES)
     for package, directory in (("docx", "templates"), ("jsonschema_specifications", "schemas")):
         module = importlib.import_module(package)
         package_root = Path(module.__file__).resolve().parent
@@ -152,6 +156,8 @@ def _pyinstaller_command(
         str(ROOT),
         "--add-data",
         _data_argument(SKILL_FILE, "assets"),
+        "--add-data",
+        _data_argument(REFERENCE_DIR, "assets/reference"),
         "--add-data",
         _data_argument(LOGO_FILE, "assets"),
         "--add-data",

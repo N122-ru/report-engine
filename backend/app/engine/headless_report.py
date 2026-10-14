@@ -21,8 +21,8 @@ from .markdown_parser import _image_size
 from .typography import apply_typography_rules, strip_trailing_dot
 from .profile import profile_metadata, validate_profile
 from .image_input import MAX_IMAGE_SIZE, MAX_IMAGES_COUNT
+from .report_safety import MAX_MARKDOWN_BYTES, ReportVerification, add_content_guards, report_digest, validate_detail
 
-MAX_MARKDOWN_BYTES = 500 * 1024
 # BMP is not supported; WebP is checked separately by its RIFF container.
 IMAGE_SIGNATURES = (
     b"\x89PNG\r\n\x1a\n",
@@ -48,6 +48,7 @@ class HeadlessReport:
         self.content = ""
         self.images: dict[str, bytes] = {}
         self.image_hashes: dict[str, str] = {}
+        self.verification = ReportVerification()
 
     def _require_report(self) -> ReportMetadata:
         if self.metadata is None:
@@ -154,6 +155,7 @@ class HeadlessReport:
         self.images[safe_name] = data
         self.image_hashes[safe_name] = hashlib.sha256(data).hexdigest()
         self.content = next_content
+        self.verification.changed()
         return safe_name
 
     def upload_images(
@@ -204,6 +206,7 @@ class HeadlessReport:
             raise ValueError(f"Изображение «{safe_name}» не найдено")
         del self.images[safe_name]
         del self.image_hashes[safe_name]
+        self.verification.changed()
         return self._revisions()
 
     def _check_revision(self, field: str, expected: str) -> None:
@@ -241,13 +244,18 @@ class HeadlessReport:
         self.metadata = self._validate_metadata({} if metadata is None else metadata)
         return self.get_report_state()
 
-    def get_report_state(self) -> dict[str, Any]:
+    def get_report_state(self, detail: str = "full") -> dict[str, Any]:
         """Return Markdown, metadata, and current report revisions."""
+        validate_detail(detail)
+        revisions = self._revisions()
+        common = {**revisions, "verify_state": self.verification.state(revisions)}
+        if detail == "digest":
+            return common | report_digest(self.content, self.images)
         return {
             "markdown_content": self.content,
             "metadata": self._require_report().model_dump(),
             "images": self.list_images(),
-            **self._revisions(),
+            **common,
         }
 
     def update_meta(self, fields: dict[str, Any], expected_meta_revision: str) -> dict[str, Any]:
@@ -256,6 +264,8 @@ class HeadlessReport:
         if not fields:
             raise ValueError("Не переданы реквизиты для обновления")
         metadata = self._validate_metadata({**self._require_report().model_dump(), **fields})
+        if metadata != self.metadata:
+            self.verification.changed()
         self.metadata = metadata
         return self._revisions()
 
@@ -267,7 +277,10 @@ class HeadlessReport:
                 raise ValueError("Импорт существующего отчёта требует meta_revision")
             self._check_revision("meta_revision", expected_meta_revision)
         metadata = profile_metadata(validated)
-        self.metadata = self._validate_metadata(metadata, allow_profile_logo=True)
+        updated = self._validate_metadata(metadata, allow_profile_logo=True)
+        if updated != self.metadata:
+            self.verification.changed()
+        self.metadata = updated
         result = self.get_report_state()
         result["profile_subject"] = validated["subject"]
         return result
@@ -296,7 +309,10 @@ class HeadlessReport:
             updated = self.content.rstrip() + ("\n\n" if self.content.strip() else "") + replacement
         if len(updated.encode("utf-8")) > MAX_MARKDOWN_BYTES:
             raise ValueError("Размер текста отчёта превышает 500 КБ")
-        self.content = updated.rstrip() + "\n"
+        next_content = updated.rstrip() + "\n"
+        if next_content != self.content:
+            self.verification.changed()
+        self.content = next_content
         return self._revisions()
 
     def autofix_typography(self, expected_revision: str) -> dict[str, Any]:
@@ -320,24 +336,39 @@ class HeadlessReport:
         fixed = "\n".join(fixed_lines)
         if len(fixed.encode("utf-8")) > MAX_MARKDOWN_BYTES:
             raise ValueError("Размер текста отчёта превышает 500 КБ")
+        if fixed != self.content:
+            self.verification.changed()
         self.content = fixed
         return self._revisions()
 
     def lint_report(self) -> dict[str, Any]:
+        """Validate the current report and advance the verification phase."""
+        result = self._lint_result()
+        self.verification.record_lint(self._revisions(), result)
+        return result
+
+    def _lint_result(self) -> dict[str, Any]:
+        """Compute lint without changing workflow state for read-only reviews."""
         metadata = self._require_report()
         docx_buffer = build_docx_report(metadata, self.content, self.images)
         result = lint_docx_document(docx_buffer)
-        return {
+        return add_content_guards({
             "is_valid": result.is_valid,
+            "status": result.status,
             "score": result.score,
             "errors": [item.model_dump() for item in result.errors],
             "warnings": [item.model_dump() for item in result.warnings],
             "metrics": result.metrics.model_dump() if result.metrics else {},
-        }
+        }, self.content, self.images)
+
+    def review_snapshot(self) -> dict[str, Any]:
+        """Return a transferable report and lint snapshot without media bytes or mutation."""
+        return self.get_report_state() | {"lint": self._lint_result()}
 
     def export_report(
         self, filename: str, expected_revision: str, expected_meta_revision: str,
         expected_image_revision: str, format: str | None = None,
+        confirm_blocked_export: bool = False,
     ) -> dict[str, Any]:
         """Export a new DOCX or PDF to the allowed directory without overwriting."""
         for field, expected in (
@@ -345,6 +376,7 @@ class HeadlessReport:
             ("image_revision", expected_image_revision),
         ):
             self._check_revision(field, expected)
+        self.verification.require_export(self._revisions(), confirm_blocked_export)
         if (
             not filename or len(filename) > 128 or filename.startswith(".")
             or filename != filename.strip() or re.search(r'[\\/:*?"<>|\x00-\x1f]', filename)

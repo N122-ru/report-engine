@@ -14,10 +14,11 @@ from mcp.server.stdio import stdio_server
 
 from .engine.headless_report import HeadlessReport
 from .engine.image_input import IMAGE_SOURCE_SCHEMA, MAX_IMAGES_COUNT, load_image_input
-from .engine.mcp_batch import BATCH_SCHEMA, validate_batch_calls
+from .engine.mcp_batch import BATCH_SCHEMA, resolve_batch_arguments, validate_batch_calls
 from .engine.pdf_converter import pdf_export_enabled
 from .engine.profile import load_profile_input
 from .engine.agent_resources import get_capabilities, read_agent_asset, read_reference, reference_resources
+from .engine.report_safety import conflict_payload, is_conflict_message
 from .version import APP_VERSION
 
 
@@ -129,6 +130,13 @@ def _tools() -> list[types.Tool]:
             ["filename"],
         ),
         _tool(
+            "get_images",
+            "Получить несколько изображений как нативный MCP Image Content.",
+            {"filenames": {"type": "array", "minItems": 1, "maxItems": 16,
+                            "items": {"type": "string"}}},
+            ["filenames"],
+        ),
+        _tool(
             "upload_image",
             "Загрузить изображение в RAM; существующие имена не заменяются.",
             {
@@ -208,6 +216,20 @@ def _tools() -> list[types.Tool]:
         },
         ["filename", "expected_revision", "expected_meta_revision", "expected_image_revision"],
     ))
+    unified_fields = {
+        "expected_snapshot_id": {
+            "type": "string",
+            "description": "Атомарная snapshot_id из get_report_state; заменяет отдельные expected_*",
+        },
+        "operation_id": {
+            "type": "string",
+            "description": "Необязательный ключ идемпотентности для безопасного повтора операции",
+        },
+    }
+    for tool in tools:
+        if tool.name not in HEADLESS_MUTATING_TOOLS and tool.name != "batch":
+            continue
+        tool.input_schema.setdefault("properties", {}).update(unified_fields)
     return tools
 
 
@@ -240,24 +262,63 @@ def _resources(report: HeadlessReport) -> list[types.Resource]:
     return result
 
 
+HEADLESS_MUTATING_TOOLS = frozenset({
+    "create_report", "import_profile", "upload_image", "upload_images",
+    "append_or_update_section", "update_meta", "delete_image",
+    "autofix_typography", "export_report",
+})
+
+
 def _dispatch_tool(report: HeadlessReport, name: str, args: dict[str, Any]) -> types.CallToolResult:
+    """Deduplicate successful mutation calls before dispatching them."""
+    is_mutating = name in HEADLESS_MUTATING_TOOLS or (
+        name == "batch" and any(call.get("name") in HEADLESS_MUTATING_TOOLS
+                                 for call in args.get("calls", []) if isinstance(call, dict))
+    )
+    operation_id = args.get("operation_id")
+    if is_mutating and operation_id is not None:
+        try:
+            cached = report.operation_cache.lookup(operation_id, args, name)
+        except (TypeError, ValueError) as exc:
+            return _text_result(str(exc), is_error=True)
+        if cached is not None:
+            return cached
+    result = _dispatch_tool_uncached(report, name, args)
+    if is_mutating and operation_id is not None and not result.is_error:
+        report.operation_cache.store(operation_id, args, result, name)
+    return result
+
+
+def _dispatch_tool_uncached(report: HeadlessReport, name: str, args: dict[str, Any]) -> types.CallToolResult:
     """Dispatch one headless tool with the same error handling inside batches."""
     try:
         if name == "batch":
             calls = validate_batch_calls(args)
             results = []
+            previous_results = []
             for call in calls:
-                response = _dispatch_tool(report, call["name"], call["arguments"])
-                if response.is_error:
-                    error = "\n".join(block.text for block in response.content if isinstance(block, types.TextContent))
-                    results.append({"name": call["name"], "ok": False, "error": error})
+                try:
+                    call_args = resolve_batch_arguments(call["arguments"], previous_results)
+                    response = _dispatch_tool(report, call["name"], call_args)
+                    if response.is_error:
+                        error = response.structured_content or "\n".join(
+                            block.text for block in response.content if isinstance(block, types.TextContent)
+                        )
+                        results.append({"name": call["name"], "ok": False, "error": error})
+                        previous_results.append(None)
+                        if args.get("stop_on_error", False):
+                            break
+                    else:
+                        value = response.structured_content
+                        if value is None:
+                            value = response.model_dump(mode="json", by_alias=True, exclude_none=True)
+                        results.append({"name": call["name"], "ok": True, "result": value})
+                        previous_results.append(value)
+                except (TypeError, ValueError, OSError, RuntimeError) as exc:
+                    results.append({"name": call["name"], "ok": False, "error": str(exc)})
+                    previous_results.append(None)
                     if args.get("stop_on_error", False):
                         break
-                else:
-                    value = response.structured_content
-                    if value is None:
-                        value = response.model_dump(mode="json", by_alias=True, exclude_none=True)
-                    results.append({"name": call["name"], "ok": True, "result": value})
             return _text_result(results)
         if name == "create_report":
             return _text_result(report.create_report(_object(args, "metadata", required=False)))
@@ -265,7 +326,10 @@ def _dispatch_tool(report: HeadlessReport, name: str, args: dict[str, Any]) -> t
             expected = args.get("expected_meta_revision")
             if expected is not None and not isinstance(expected, str):
                 raise ValueError("Параметр «expected_meta_revision» должен быть строкой")
-            return _text_result(report.import_profile(load_profile_input(args), expected))
+            return _text_result(report.import_profile(
+                load_profile_input(args), expected,
+                expected_snapshot_id=args.get("expected_snapshot_id"),
+            ))
         if name == "get_report_state":
             return _text_result(report.get_report_state(args.get("detail", "full")))
         if name == "get_capabilities":
@@ -282,21 +346,44 @@ def _dispatch_tool(report: HeadlessReport, name: str, args: dict[str, Any]) -> t
                 types.ImageContent(data=base64.b64encode(data).decode("ascii"), mimeType=image_type),
                 types.TextContent(text=f"Изображение «{filename}» получено"),
             ])
+        if name == "get_images":
+            filenames = args.get("filenames")
+            if not isinstance(filenames, list) or not 1 <= len(filenames) <= 16:
+                raise ValueError("Ожидается от 1 до 16 имён изображений")
+            content = []
+            for filename in filenames:
+                safe_name = _string({"filename": filename}, "filename")
+                data = report.get_image(safe_name)
+                content.append(types.ImageContent(
+                    data=base64.b64encode(data).decode("ascii"),
+                    mimeType=mimetypes.guess_type(safe_name)[0] or "image/png",
+                ))
+            content.append(types.TextContent(text=f"Пакетно получено изображений: {len(filenames)}"))
+            return types.CallToolResult(content=content)
         if name == "upload_image":
             expected_revision = args.get("expected_revision")
+            expected_image = (args.get("expected_image_revision")
+                              if args.get("expected_snapshot_id") is None else None)
+            if expected_image is None and args.get("expected_snapshot_id") is None:
+                expected_image = expected_revision
             result = report.upload_image(
                 _string(args, "filename"), load_image_input(args, _decode_image),
-                _string(args, "expected_image_revision"),
+                _string({"expected_image_revision": expected_image}, "expected_image_revision")
+                if args.get("expected_snapshot_id") is None else None,
                 caption=str(args.get("caption", "")),
                 insert_into_report=bool(args.get("insert_into_report", False)),
                 expected_revision=expected_revision if isinstance(expected_revision, str) else None,
+                expected_snapshot_id=args.get("expected_snapshot_id"),
             )
             return _text_result(result)
         if name == "upload_images":
             items = args.get("images")
             if not isinstance(items, list) or not 1 <= len(items) <= MAX_IMAGES_COUNT:
                 raise ValueError(f"Ожидается от 1 до {MAX_IMAGES_COUNT} изображений")
-            expected_image = _string(args, "expected_image_revision")
+            expected_image = (args.get("expected_image_revision") or args.get("expected_revision")
+                              if args.get("expected_snapshot_id") is None else None)
+            if args.get("expected_snapshot_id") is None and not isinstance(expected_image, str):
+                raise ValueError("Параметр «expected_image_revision» должен быть непустой строкой")
             prepared = []
             for item in items:
                 if not isinstance(item, dict):
@@ -310,30 +397,58 @@ def _dispatch_tool(report: HeadlessReport, name: str, args: dict[str, Any]) -> t
                 prepared.append(image)
             return _text_result(report.upload_images(
                 prepared, expected_image, expected_revision=args.get("expected_revision"),
+                expected_snapshot_id=args.get("expected_snapshot_id"),
             ))
         if name == "append_or_update_section":
             return _text_result(report.append_or_update_section(
                 _string(args, "section_heading"), _string(args, "section_content", required=False),
-                _string(args, "expected_revision"),
+                _string(args, "expected_revision") if args.get("expected_snapshot_id") is None else None,
+                expected_snapshot_id=args.get("expected_snapshot_id"),
             ))
         if name == "update_meta":
-            return _text_result(report.update_meta(_object(args, "fields"), _string(args, "expected_meta_revision")))
+            fields = args.get("fields")
+            if fields is None:
+                allowed = {
+                    "work_theme", "work_number", "work_type", "discipline", "institute",
+                    "department", "university", "ministry", "city", "year",
+                    "teachers", "students", "references", "custom_instructions",
+                }
+                fields = {key: value for key, value in args.items() if key in allowed}
+            return _text_result(report.update_meta(
+                fields if isinstance(fields, dict) else _object(args, "fields"),
+                _string(args, "expected_meta_revision") if args.get("expected_snapshot_id") is None else None,
+                expected_snapshot_id=args.get("expected_snapshot_id"),
+            ))
         if name == "delete_image":
-            return _text_result(report.delete_image(_string(args, "filename"), _string(args, "expected_image_revision")))
+            return _text_result(report.delete_image(
+                _string(args, "filename"),
+                _string({"expected_image_revision": args.get("expected_image_revision") or args.get("expected_revision")},
+                        "expected_image_revision") if args.get("expected_snapshot_id") is None else None,
+                expected_snapshot_id=args.get("expected_snapshot_id"),
+            ))
         if name == "lint_report":
             return _text_result(report.lint_report())
         if name == "autofix_typography":
-            return _text_result(report.autofix_typography(_string(args, "expected_revision")))
+            return _text_result(report.autofix_typography(
+                _string(args, "expected_revision") if args.get("expected_snapshot_id") is None else None,
+                expected_snapshot_id=args.get("expected_snapshot_id"),
+            ))
         if name == "export_report":
             return _text_result(report.export_report(
-                _string(args, "filename"), _string(args, "expected_revision"),
-                _string(args, "expected_meta_revision"), _string(args, "expected_image_revision"),
+                _string(args, "filename"),
+                _string(args, "expected_revision") if args.get("expected_snapshot_id") is None else None,
+                _string(args, "expected_meta_revision") if args.get("expected_snapshot_id") is None else None,
+                _string(args, "expected_image_revision") if args.get("expected_snapshot_id") is None else None,
                 args.get("format") if isinstance(args.get("format"), str) else None,
                 args.get("confirm_blocked_export", False),
+                expected_snapshot_id=args.get("expected_snapshot_id"),
             ))
         raise ValueError(f"Неизвестный инструмент: {name}")
     except (TypeError, ValueError, OSError, RuntimeError) as exc:
-        return _text_result(str(exc), is_error=True)
+        message = str(exc)
+        if is_conflict_message(message):
+            return _text_result(conflict_payload(message, report._revisions()), is_error=True)
+        return _text_result(message, is_error=True)
 
 
 def _make_server(report: HeadlessReport) -> Server:

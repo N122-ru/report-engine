@@ -26,6 +26,7 @@ Own the FastAPI application that validates reports, generates DOCX/PDF files, se
 - MCP export requires a completed lint of the current report. Only literal `confirm_blocked_export: true` bypasses critical placeholders/missing-image blockers, never the lint phase. `review_snapshot` and alternate-text lint do not advance the phase.
 - Live `export_report` returns document bytes as base64 without server persistence; headless retains exclusive file creation in its configured output directory. The independent browser HTTP generation contract is unchanged.
 - `agent_resources.py` serves the canonical core and five allowlisted references in source/frozen runtimes. `get_capabilities` describes these resources and runtime limits; `write_report` embeds only the core.
+- Live and headless MCP share the `snapshot_id` contract, structured revision conflicts, operation-id replay protection, and batch result references; legacy revision arguments remain supported.
 
 ## Work Guidance
 

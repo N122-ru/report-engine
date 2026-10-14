@@ -46,6 +46,10 @@ headless-процессе. Спрашивай пользователя, не в�
 
 - Записи выполняй последовательно со свежими версиями. При конфликте или
   неизвестном результате перечитай состояние; не повторяй старые параметры.
+  Сохраняй `snapshot_id` вместе с тремя ревизиями; `expected_snapshot_id`
+  проверяет их атомарно и возвращает `refresh_and_retry` при конфликте.
+- Для повторяемых мутаций передавай уникальный `operation_id`; одинаковый
+  повтор безопасно возвращает сохранённый результат, другой набор аргументов отклоняется.
 - `batch`: 1–20 `{name, arguments}`, последовательный ответ `{name, ok, result|error}`;
   ошибки продолжаются, `stop_on_error: true` останавливает, отката нет.
   Вложенный batch запрещён; версии автоматически не подставляются.
@@ -56,6 +60,10 @@ headless-процессе. Спрашивай пользователя, не в�
   `expected_image_revision`, а при `insert_into_report=true` ещё `expected_revision`.
   Headless сохраняет валидные элементы: проверь `uploaded_count` и `results`,
   не повторяй весь пакет после частичного успеха. Существующее имя не заменяется.
+- Batch arguments may reference earlier successful results with exact strings such
+  as `$0.revision`, `$1.snapshot_id`, or `$2.results.uploaded_count` (at most two
+  path levels). References are resolved before dispatch; missing paths are errors.
+- Outside `batch`, `$...` remains an ordinary string and is never interpolated.
 
 ## Стиль-минимум и сомнительные данные
 

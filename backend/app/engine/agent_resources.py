@@ -8,7 +8,21 @@ from .pdf_converter import pdf_export_status
 from .report_safety import MAX_MARKDOWN_BYTES
 
 REFERENCE_NAMES = ("figures", "formulas", "tables", "style", "literals")
-CONTRACT_VERSION = "1.1"
+CONTRACT_VERSION = "1.2"
+LIVE_TOOL_NAMES = frozenset({
+    "batch", "list_images", "get_image", "get_images", "upload_image", "upload_images",
+    "update_image_layout", "get_report_state", "append_or_update_section", "patch_text",
+    "apply_patches", "get_document_outline", "replace_block", "delete_block", "move_figure",
+    "get_last_edit", "get_edit_history", "rollback_last_edit", "lint_report",
+    "autofix_typography", "update_meta", "delete_image", "delete_images", "import_profile",
+    "get_capabilities", "review_snapshot", "export_report",
+})
+HEADLESS_TOOL_NAMES = frozenset({
+    "batch", "create_report", "import_profile", "get_report_state", "get_capabilities",
+    "review_snapshot", "list_images", "get_image", "get_images", "upload_image", "upload_images",
+    "append_or_update_section", "update_meta", "delete_image", "lint_report",
+    "autofix_typography", "export_report",
+})
 
 
 def read_agent_asset(relative: str) -> str:
@@ -42,10 +56,20 @@ def read_reference(uri: str) -> str:
 
 def get_capabilities(transport: str) -> dict:
     """Describe the application contract separately from MCP protocol capabilities."""
+    own = LIVE_TOOL_NAMES if transport == "live" else HEADLESS_TOOL_NAMES
+    other = HEADLESS_TOOL_NAMES if transport == "live" else LIVE_TOOL_NAMES
+    tools_diff = [
+        {"name": name, "available_in": transport}
+        for name in sorted(own - other)
+    ] + [
+        {"name": name, "available_in": "live" if transport == "headless" else "headless"}
+        for name in sorted(other - own)
+    ]
     return {
         "transport": transport, "contract_version": CONTRACT_VERSION,
         **pdf_export_status(), "file_path": True,
         "limits": {"image_bytes": MAX_IMAGE_SIZE, "images_count": MAX_IMAGES_COUNT,
                    "markdown_bytes": MAX_MARKDOWN_BYTES},
         "reference_resources": [resource["uri"] for resource in reference_resources()],
+        "tools_diff": tools_diff,
     }

@@ -21,7 +21,7 @@ from typing import Dict, List, Optional, Set, Any
 
 from .markdown_parser import _image_size
 from .image_input import MAX_IMAGE_SIZE, MAX_IMAGES_COUNT
-from .report_safety import ReportVerification
+from .report_safety import OperationCache, ReportVerification, with_snapshot
 
 MAX_INACTIVE_HOURS = 48
 
@@ -59,6 +59,7 @@ class SessionData:
         self.listeners: Set[asyncio.Queue] = set()
         self.edit_history: deque[dict] = deque(maxlen=20)
         self.verification = ReportVerification()
+        self.operation_cache = OperationCache()
         # MCP reads may run concurrently, but mutations for one session must
         # observe revisions in order and never overwrite one another.
         self.mcp_write_lock = asyncio.Lock()
@@ -85,6 +86,15 @@ class SessionData:
             "deleted": sorted(self.deleted_images),
         }, ensure_ascii=False, separators=(",", ":"))
         return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+    @property
+    def snapshot_id(self) -> str:
+        """Return the combined revision for an atomic report snapshot."""
+        return with_snapshot({
+            "revision": self.revision,
+            "meta_revision": self.meta_revision,
+            "image_revision": self.image_revision,
+        })["snapshot_id"]
 
     def add_listener(self, queue: asyncio.Queue) -> None:
         self.listeners.add(queue)

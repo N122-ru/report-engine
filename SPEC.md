@@ -99,20 +99,43 @@ standards compliance or institution-specific requirements.
   A lint with warnings still completes this phase; an exception or lint of other
   Markdown does not. No-op writes retain verification. `export_allowed` means
   current lint exists and its `export_blockers` is empty.
-- `export_report` requires all three fresh `expected_*` revisions. Stale verification
+ - `export_report` requires either all three fresh `expected_*` revisions or one fresh
+   `expected_snapshot_id`. Stale verification
   produces a Russian "сначала проверь отчёт" error. Nonempty blockers produce an
   error listing items; only literal boolean `confirm_blocked_export: true` bypasses
   these blockers, never the mandatory post-mutation lint. Confirmation is not sticky.
   Headless retains its existing filename/output-directory result. New live export
   accepts `format: docx|pdf` (default docx) and optional simple `filename`; it returns
   `filename`, `format`, `size_bytes`, `sha256`, and `base64_data` without server disk
-  persistence. Browser `/api/generate` remains the existing independent HTTP contract.
+   persistence. Browser `/api/generate` remains the existing independent HTTP contract.
+
+### Unified MCP Contract (1.2)
+
+- `get_report_state` and every successful mutation expose `revision`,
+  `meta_revision`, `image_revision`, and `snapshot_id`. The latter is a SHA-256
+  digest of the three revisions in that order.
+- Mutations accept additive `expected_snapshot_id`. When supplied it atomically
+  validates all three current revisions and takes precedence over legacy
+  `expected_*` fields; the legacy fields remain supported.
+- Revision conflicts in live and headless MCP include `conflict: true`, the
+  complete `current` revision tuple including `snapshot_id`, and
+  `next_action: "refresh_and_retry"`.
+- Mutations accept optional string `operation_id`. Successful results are kept
+  in a per-session/per-process LRU of 100 entries; an identical retry returns
+  the cached result, while reusing an ID with different arguments is rejected.
+- Batch arguments resolve exact `$N.key` and `$N.key.key` references from
+  earlier successful results before dispatch. Missing paths fail clearly;
+  outside batch, such strings are ordinary values.
+- Both manifests expose the common tool names and additive version fields.
+  `get_capabilities.tools_diff` lists transport-specific tools. Live keeps
+  browser block editors and base64 export; headless keeps report creation and
+  output-directory export.
 
 ## Headless MCP and Portable Profiles
 
 - Headless is a separate stdio process with one RAM report, no browser or HTTP server.
   It exposes content/metadata/media editing, linting, profile import, and explicit export.
-  Fresh text, metadata, and image revisions protect writes and exports.
+  Fresh text, metadata, and image revisions, or one atomic snapshot, protect writes and exports.
 - Headless export is restricted to a new simple filename in the pre-existing
   `--output-dir`; traversal, symlinks at the target, and overwrites are rejected.
 - A portable profile is UTF-8 JSON with `format: "report-engine-profile"`,
@@ -123,8 +146,8 @@ standards compliance or institution-specific requirements.
   and applies metadata through the existing conflict path without replacing the body/media.
 - Live and headless `import_profile` accept exactly one of `profile` or `file_path`.
   File paths are local to the server and relative paths use its working directory.
-  Live import requires `expected_meta_revision`; headless import creates a report
-  if absent, otherwise requires that revision. Subject fields override corresponding meta fields.
+  Live import requires `expected_meta_revision` or `expected_snapshot_id`; headless import creates a report
+  if absent, otherwise requires one of those checks. Subject fields override corresponding meta fields.
 - Web/live merge profile values into current metadata. Headless rebuilds metadata
   from the profile and defaults for report-only fields, retaining body/media.
   Headless accepts custom logos only through profile import as bounded base64 image
@@ -174,8 +197,8 @@ creates its default `output` directory.
   sequentially. Results are ordered `{name, ok, result|error}` entries; errors
   continue by default, while `stop_on_error: true` stops at the first error.
   Nested batches and malformed call arrays fail preflight before any execution.
-  All available tools are allowed; mutations are not rolled back, and revision
-  arguments are never inferred from previous results. Live mutating batches hold
+  All available tools are allowed; mutations are not rolled back. Exact result
+  references may supply arguments from previous calls. Live mutating batches hold
   one session MCP write lock across the complete sequence; read-only calls remain
   available without that lock.
 - Image uploads accept exactly one of `base64_data` or `file_path` per image.
@@ -193,8 +216,8 @@ creates its default `output` directory.
 | Tools | Contract |
 | --- | --- |
 | `create_report` | Create one RAM draft; never silently reset an existing report. |
-| `import_profile` | Accept `profile` object or local `file_path`, not both; validate `report-engine-profile` version 1 and size limits before applying. Create a draft if absent; otherwise require fresh `expected_meta_revision`. |
-| `get_report_state` | Return Markdown, metadata, image manifest, `revision`, `meta_revision`, and `image_revision`. |
+ | `import_profile` | Accept `profile` object or local `file_path`, not both; validate `report-engine-profile` version 1 and size limits before applying. Create a draft if absent; otherwise require fresh metadata revision or snapshot. |
+ | `get_report_state` | Return Markdown, metadata, image manifest, the three revisions, and `snapshot_id`. |
 | `get_capabilities`, `review_snapshot` | Return runtime/limits/reference discovery or a read-only transferable review with lint; see the shared safety contract. |
 | `list_images`, `get_image` | Read media/manifest; return native MCP image content for vision. |
 | `upload_image`, `delete_image` | Require fresh image revision, reject duplicate names and invalid bytes; deletion rejects referenced images. Inserting an image into text also requires text revision. |
@@ -203,7 +226,7 @@ creates its default `output` directory.
 | `append_or_update_section` | Add or replace the body of an unambiguous heading using fresh text revision; retain adjacent sections. |
 | `update_meta` | Apply supplied fields using fresh metadata revision. |
 | `lint_report`, `autofix_typography` | Validate generated DOCX in RAM; typography writes require fresh text revision. |
-| `export_report` | Explicitly write a new DOCX/PDF with all three fresh revisions into the configured output directory after current lint; critical blockers require `confirm_blocked_export: true`. |
+ | `export_report` | Explicitly write a new DOCX/PDF with either all three fresh revisions or one snapshot into the configured output directory after current lint; critical blockers require `confirm_blocked_export: true`. |
 
 - State and image bytes remain in RAM until process exit. No automatic draft persistence.
 - Export accepts only a simple safe filename, rejects traversal/symlink targets

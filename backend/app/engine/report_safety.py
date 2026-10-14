@@ -1,6 +1,8 @@
 """Share stateless report guards and in-memory verification across MCP transports."""
 
 import hashlib
+import json
+from collections import OrderedDict
 from copy import deepcopy
 from typing import Any
 import re
@@ -12,6 +14,7 @@ from .section_editor import sections
 
 MAX_MARKDOWN_BYTES = 500 * 1024
 BLOCKING_KINDS = frozenset({"placeholder", "missing_image"})
+REVISION_FIELDS = ("revision", "meta_revision", "image_revision")
 GUARDS = (
     ("placeholder", re.compile(
         r"\b(?:данных|информации|сведений|результатов)\s+(?:нет|недостаточно)\b|"
@@ -100,6 +103,91 @@ def validate_detail(detail: Any) -> None:
     """Reject unknown state modes rather than silently returning the full body."""
     if detail not in ("full", "digest"):
         raise ValueError("detail должен быть full или digest")
+
+
+def snapshot_id(revisions: dict[str, str]) -> str:
+    """Return one digest for the text, metadata, and image revisions."""
+    try:
+        values = [revisions[field] for field in REVISION_FIELDS]
+    except KeyError as exc:
+        raise ValueError("Неполный набор ревизий отчёта") from exc
+    payload = "\0".join(values).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def with_snapshot(revisions: dict[str, str]) -> dict[str, str]:
+    """Add the combined snapshot identifier without changing legacy fields."""
+    current = {field: revisions[field] for field in REVISION_FIELDS}
+    return current | {"snapshot_id": snapshot_id(current)}
+
+
+def conflict_payload(message: str, revisions: dict[str, str]) -> dict[str, Any]:
+    """Build the stable machine-readable detail for a revision conflict."""
+    return {
+        "error": message,
+        "conflict": True,
+        "current": with_snapshot(revisions),
+        "next_action": "refresh_and_retry",
+    }
+
+
+def is_conflict_message(message: str) -> bool:
+    """Recognize revision errors from both legacy and unified wording."""
+    return any(marker in message.lower() for marker in (
+        "конфликт версий", "документ изменился", "реквизиты изменились",
+        "набор изображений изменился", "отчёт изменился",
+    ))
+
+
+def operation_fingerprint(arguments: dict[str, Any], operation_name: str = "") -> str:
+    """Hash operation arguments while excluding the id used for deduplication."""
+    payload = {key: value for key, value in arguments.items() if key != "operation_id"}
+    if operation_name:
+        payload["__operation_name__"] = operation_name
+    try:
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                             separators=(",", ":"), default=repr)
+    except (TypeError, ValueError):
+        encoded = repr(payload)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+class OperationCache:
+    """Keep at most the latest 100 successful idempotent operation results."""
+
+    def __init__(self, limit: int = 100) -> None:
+        self.limit = limit
+        self._entries: OrderedDict[str, tuple[str, Any]] = OrderedDict()
+
+    def lookup(self, operation_id: Any, arguments: dict[str, Any], operation_name: str = "") -> Any:
+        """Return a cached result, or ``None`` when the operation is new."""
+        if operation_id is None:
+            return None
+        if not isinstance(operation_id, str) or not operation_id.strip():
+            raise ValueError("Параметр «operation_id» должен быть непустой строкой")
+        fingerprint = operation_fingerprint(arguments, operation_name)
+        entry = self._entries.get(operation_id)
+        if entry is None:
+            return None
+        saved_fingerprint, result = entry
+        if saved_fingerprint != fingerprint:
+            raise ValueError("operation_id уже использован с другими аргументами")
+        self._entries.move_to_end(operation_id)
+        return deepcopy(result)
+
+    def store(self, operation_id: Any, arguments: dict[str, Any], result: Any,
+              operation_name: str = "") -> None:
+        """Store one successful operation and evict the least recently used item."""
+        if operation_id is None:
+            return
+        if not isinstance(operation_id, str) or not operation_id.strip():
+            raise ValueError("Параметр «operation_id» должен быть непустой строкой")
+        self._entries[operation_id] = (
+            operation_fingerprint(arguments, operation_name), deepcopy(result)
+        )
+        self._entries.move_to_end(operation_id)
+        while len(self._entries) > self.limit:
+            self._entries.popitem(last=False)
 
 
 class ReportVerification:

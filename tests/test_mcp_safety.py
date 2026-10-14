@@ -340,3 +340,137 @@ def test_live_rollback_and_browser_mutations_invalidate_lint():
     call("lint_report")
     assert client.delete(f"/api/session/{token}/images/unused.png").status_code == 200
     assert not call("get_report_state")["verify_state"]["lint_after_last_change"]
+
+
+def test_snapshot_id_is_atomic_and_replaces_legacy_revision_arguments(transport):
+    _, call, write, _, _, _, _ = transport
+    _, initial = call("get_report_state")
+    assert initial["snapshot_id"]
+    write("Исходный текст.")
+    _, current = call("get_report_state")
+    assert current["snapshot_id"] != initial["snapshot_id"]
+    if transport[0] == "headless":
+        arguments = {"fields": {"work_theme": "Тема"}, "expected_snapshot_id": current["snapshot_id"]}
+    else:
+        arguments = {"work_theme": "Тема", "expected_snapshot_id": current["snapshot_id"]}
+    assert not call("update_meta", **arguments)[0]
+    _, changed = call("get_report_state")
+    assert changed["snapshot_id"] != current["snapshot_id"]
+    before = changed["markdown_content"]
+    error, result = call("append_or_update_section", section_heading="# Вывод",
+                         section_content="Не должно сохраниться.",
+                         expected_snapshot_id=current["snapshot_id"])
+    assert error
+    assert "refresh_and_retry" in result
+    _, after = call("get_report_state")
+    assert after["markdown_content"] == before
+
+
+def test_revision_conflicts_include_machine_readable_next_action(transport):
+    _, call, _, _, _, _, _ = transport
+    _, state = call("get_report_state")
+    error, text = call("append_or_update_section", section_heading="# Вывод",
+                       section_content="Текст.", expected_snapshot_id="stale")
+    assert error
+    payload = json.loads(text)
+    assert payload["conflict"] is True
+    assert payload["current"]["snapshot_id"] == state["snapshot_id"]
+    assert payload["next_action"] == "refresh_and_retry"
+
+
+def test_operation_id_retries_are_cached_without_reapplying(transport):
+    _, call, _, _, _, _, _ = transport
+    _, state = call("get_report_state")
+    if transport[0] == "headless":
+        arguments = {"fields": {"work_theme": "Повторяемая тема"},
+                     "expected_meta_revision": state["meta_revision"], "operation_id": "op-meta-1"}
+    else:
+        arguments = {"work_theme": "Повторяемая тема",
+                     "expected_meta_revision": state["meta_revision"], "operation_id": "op-meta-1"}
+    error, first = call("update_meta", **arguments)
+    assert not error
+    _, after_first = call("get_report_state")
+    error, second = call("update_meta", **arguments)
+    assert not error
+    assert second == first
+    _, after_retry = call("get_report_state")
+    assert after_retry["snapshot_id"] == after_first["snapshot_id"]
+    if transport[0] == "headless":
+        different = {"fields": {"work_theme": "Другая тема"}, **{
+            key: arguments[key] for key in ("operation_id",)
+        }}
+    else:
+        different = {"work_theme": "Другая тема", "operation_id": arguments["operation_id"]}
+    assert call("update_meta", **different)[0]
+
+
+def test_batch_references_chain_previous_results_in_headless(tmp_path):
+    from backend.app.headless import _dispatch_tool
+    report = __import__("backend.app.engine.headless_report", fromlist=["HeadlessReport"]).HeadlessReport(tmp_path)
+    result = _dispatch_tool(report, "batch", {"calls": [
+        {"name": "create_report", "arguments": {}},
+        {"name": "update_meta", "arguments": {
+            "fields": {"work_theme": "Проверка ссылок"},
+            "expected_meta_revision": "$0.meta_revision",
+        }},
+        {"name": "get_report_state", "arguments": {}},
+    ]})
+    assert not result.is_error
+    payload = json.loads(result.content[0].text)
+    assert all(item["ok"] for item in payload)
+    assert payload[2]["result"]["metadata"]["work_theme"] == "Проверка ссылок"
+
+    broken = _dispatch_tool(report, "batch", {"calls": [
+        {"name": "get_report_state", "arguments": {}},
+        {"name": "update_meta", "arguments": {
+            "fields": {"work_theme": "Не применено"}, "expected_meta_revision": "$0.no_such_field",
+        }},
+    ]})
+    broken_payload = json.loads(broken.content[0].text)
+    assert broken_payload[1]["ok"] is False
+    assert "Ссылка" in broken_payload[1]["error"]
+
+
+def test_operation_ids_do_not_leak_between_headless_reports(tmp_path):
+    from backend.app.engine.headless_report import HeadlessReport
+    from backend.app.headless import _dispatch_tool
+
+    # The output directories must exist before a headless report is constructed.
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    first = HeadlessReport(first_dir)
+    second = HeadlessReport(second_dir)
+    for report in (first, second):
+        result = _dispatch_tool(report, "create_report", {"operation_id": "create-once"})
+        assert not result.is_error
+        assert report.metadata is not None
+
+
+def test_live_and_headless_share_the_common_tool_names(transport):
+    from backend.app.headless import _tools
+    name, _, _, _, _, client, token = transport
+    headless_names = {tool.name for tool in _tools()}
+    if name == "live":
+        from backend.app.engine.mcp_router import MCP_LIVE_TOOLS
+        live_names = {tool["name"] for tool in MCP_LIVE_TOOLS}
+        capabilities = client.post(f"/api/mcp/messages?token={token}", json={
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": {"name": "get_capabilities", "arguments": {}},
+        }).json()["result"]
+        capabilities = json.loads(capabilities["content"][0]["text"])
+    else:
+        live_names = {"batch", "list_images", "get_image", "get_images", "upload_image",
+                      "upload_images", "get_report_state", "append_or_update_section",
+                      "update_meta", "delete_image", "lint_report", "autofix_typography",
+                      "import_profile", "get_capabilities", "review_snapshot", "export_report"}
+        error, capabilities = transport[1]("get_capabilities")
+        assert not error
+    common = {"batch", "list_images", "get_image", "get_images", "upload_image",
+              "upload_images", "get_report_state", "append_or_update_section", "update_meta",
+              "delete_image", "lint_report", "autofix_typography", "import_profile",
+              "get_capabilities", "review_snapshot", "export_report"}
+    assert common <= live_names
+    assert common <= headless_names
+    assert isinstance(capabilities["tools_diff"], list)

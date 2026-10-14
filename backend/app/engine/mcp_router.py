@@ -31,8 +31,11 @@ from .section_editor import edit_section, sections, section_identifier
 from .block_editor import blocks, edit_block, move_figure
 from .profile import load_profile_input, profile_metadata
 from .image_input import IMAGE_SOURCE_SCHEMA, load_image_input
-from .mcp_batch import BATCH_SCHEMA, validate_batch_calls
-from .report_safety import add_content_guards, report_digest, validate_detail
+from .mcp_batch import BATCH_SCHEMA, resolve_batch_arguments, validate_batch_calls
+from .report_safety import (
+    REVISION_FIELDS, add_content_guards, conflict_payload, is_conflict_message,
+    report_digest, validate_detail, with_snapshot,
+)
 from .agent_resources import get_capabilities, read_agent_asset, read_reference, reference_resources
 from .pdf_converter import convert_docx_to_pdf
 from .security import PDF_SEMAPHORE
@@ -559,7 +562,30 @@ MCP_MUTATING_TOOLS = frozenset({
     "import_profile",
     "delete_image",
     "delete_images",
+    "export_report",
 })
+
+
+def _add_unified_mutation_fields() -> None:
+    """Advertise additive snapshot and idempotency arguments on live writes."""
+    fields = {
+        "expected_snapshot_id": {
+            "type": "string",
+            "description": "Атомарная snapshot_id из get_report_state; заменяет отдельные expected_*",
+        },
+        "operation_id": {
+            "type": "string",
+            "description": "Необязательный ключ идемпотентности для безопасного повтора операции",
+        },
+    }
+    for tool in MCP_LIVE_TOOLS:
+        if tool["name"] not in MCP_MUTATING_TOOLS and tool["name"] != "batch":
+            continue
+        properties = tool["inputSchema"].setdefault("properties", {})
+        properties.update(fields)
+
+
+_add_unified_mutation_fields()
 
 
 def _ordered_mcp_tools() -> List[Dict[str, Any]]:
@@ -602,11 +628,49 @@ def _session_revisions(session: SessionData) -> Dict[str, str]:
             "image_revision": session.image_revision}
 
 
+def _session_snapshot(session: SessionData) -> Dict[str, str]:
+    """Capture all three live revisions and their atomic snapshot identifier."""
+    return with_snapshot(_session_revisions(session))
+
+
+def _check_expected_snapshot(
+    args: Dict[str, Any], session: SessionData, fields: tuple[str, ...],
+    *, require_revision: bool = False,
+) -> None:
+    """Prefer one atomic snapshot while retaining legacy field checks."""
+    expected_snapshot = args.get("expected_snapshot_id")
+    if expected_snapshot is not None:
+        if not isinstance(expected_snapshot, str) or not expected_snapshot:
+            raise ValueError("Параметр «expected_snapshot_id» должен быть непустой строкой")
+        if expected_snapshot != _session_snapshot(session)["snapshot_id"]:
+            raise ValueError("Конфликт версий: получите актуальное состояние отчёта")
+        return
+    for field in fields:
+        if args.get(f"expected_{field}") != getattr(session, field):
+            messages = {
+                "revision": "Документ изменился: конфликт версий, перечитайте get_report_state",
+                "meta_revision": "Реквизиты изменились: конфликт версий, перечитайте get_report_state",
+                "image_revision": "Набор изображений изменился: конфликт версий, перечитайте состояние",
+            }
+            raise ValueError(messages[field])
+    if require_revision and args.get("expected_revision") != session.revision:
+        raise ValueError("Конфликт версий: получите актуальное состояние отчёта")
+
+
+def _decorate_mutation_result(
+    tool_name: str, result: Any, session: SessionData,
+) -> Any:
+    """Make every live mutation return the complete current version tuple."""
+    if tool_name in MCP_MUTATING_TOOLS and isinstance(result, dict):
+        return result | _session_snapshot(session)
+    return result
+
+
 def _review_snapshot(session: SessionData, lint: Dict[str, Any]) -> Dict[str, Any]:
     """Package a read-only review without granting the mandatory lint phase."""
     revisions = _session_revisions(session)
     return {"markdown_content": session.content, "metadata": session.meta,
-            "images": session.list_images(), **revisions,
+            "images": session.list_images(), **with_snapshot(revisions),
             "verify_state": session.verification.state(revisions), "lint": lint}
 
 
@@ -615,13 +679,19 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
     if tool_name == "batch":
         calls = validate_batch_calls(args)
         results = []
-        for call in calls:
+        previous_results = []
+        for index, call in enumerate(calls):
             try:
-                result = await _dispatch_mcp_tool(call["name"], call["arguments"], session)
+                call_args = resolve_batch_arguments(call["arguments"], previous_results)
+                result = await _dispatch_mcp_tool_with_operation(call["name"], call_args, session)
                 results.append({"name": call["name"], "ok": True, "result": result})
+                previous_results.append(result)
             except Exception as exc:
+                error = (conflict_payload(str(exc), _session_revisions(session))
+                         if is_conflict_message(str(exc)) else f"Ошибка выполнения {call['name']}: {exc}")
                 results.append({"name": call["name"], "ok": False,
-                                "error": f"Ошибка выполнения {call['name']}: {exc}"})
+                                "error": error})
+                previous_results.append(None)
                 if args.get("stop_on_error", False):
                     break
         return results
@@ -697,16 +767,14 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         caption = args.get("caption", "").strip()
         insert_into_report = args.get("insert_into_report", False)
 
-        if args.get("expected_revision") != session.revision:
-            raise ValueError("Документ изменился: перечитайте get_report_state перед загрузкой рисунка")
+        _check_expected_snapshot(args, session, ("revision",))
         if not filename:
             raise ValueError("Не указан filename")
 
         raw_bytes = await asyncio.to_thread(
             load_image_input, args, lambda encoded: _decode_image_data(encoded.strip(), filename),
         )
-        if args.get("expected_revision") != session.revision:
-            raise ValueError("Документ изменился: перечитайте get_report_state перед загрузкой рисунка")
+        _check_expected_snapshot(args, session, ("revision",))
         safe_name = session.add_image(filename, raw_bytes)
 
         await session.broadcast({
@@ -743,8 +811,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         }
 
     elif tool_name == "upload_images":
-        if args.get("expected_revision") != session.revision:
-            raise ValueError("Документ изменился: перечитайте outline перед пакетной загрузкой")
+        _check_expected_snapshot(args, session, ("revision",))
         items = args.get("images")
         if not isinstance(items, list) or not 1 <= len(items) <= MAX_IMAGES_COUNT:
             raise ValueError(f"Ожидается от 1 до {MAX_IMAGES_COUNT} изображений")
@@ -770,8 +837,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
                     raise ValueError("Целевой блок для рисунка не найден в текущем outline")
                 caption = str(item.get("caption") or "Иллюстрация").replace("\n", " ").replace("]", "")
                 insertions.setdefault(anchors[anchor_id], []).append(f"![{caption}]({name})")
-        if args.get("expected_revision") != session.revision:
-            raise ValueError("Документ изменился: перечитайте outline перед пакетной загрузкой")
+        _check_expected_snapshot(args, session, ("revision",))
         if session.image_revision != image_revision:
             raise ValueError("Набор изображений изменился: перечитайте list_images перед пакетной загрузкой")
         new_md = session.content
@@ -797,7 +863,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         detail = args.get("detail", "full")
         validate_detail(detail)
         revisions = _session_revisions(session)
-        common = {**revisions, "verify_state": session.verification.state(revisions)}
+        common = {**with_snapshot(revisions), "verify_state": session.verification.state(revisions)}
         if detail == "digest":
             return common | report_digest(session.content, session.images)
         return {
@@ -813,8 +879,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
 
     elif tool_name == "export_report":
         revisions = _session_revisions(session)
-        if any(args.get(f"expected_{key}") != value for key, value in revisions.items()):
-            raise ValueError("Конфликт версий: получите актуальное состояние отчёта")
+        _check_expected_snapshot(args, session, tuple(REVISION_FIELDS))
         confirm = args.get("confirm_blocked_export", False)
         session.verification.require_export(revisions, confirm)
         output_format = args.get("format", "docx")
@@ -851,8 +916,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
 
     elif tool_name in ("replace_block", "delete_block"):
         before = session.content
-        if args.get("expected_revision") != session.revision:
-            raise ValueError("Документ изменился: перечитайте outline перед точечной правкой")
+        _check_expected_snapshot(args, session, ("revision",))
         replacement = args.get("content") if tool_name == "replace_block" else None
         if tool_name == "replace_block" and not isinstance(replacement, str):
             raise ValueError("Поле content должно быть строкой")
@@ -866,8 +930,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         }
 
     elif tool_name == "move_figure":
-        if args.get("expected_revision") != session.revision:
-            raise ValueError("Документ изменился: перечитайте outline перед перемещением")
+        _check_expected_snapshot(args, session, ("revision",))
         new_md = move_figure(session.content, session.revision, args.get("block_id", ""),
                              args.get("before_block_id", ""))
         if new_md != session.content:
@@ -893,7 +956,8 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         entry = session.edit_history[-1]
         if entry["source"] != "mcp_agent":
             raise ValueError("Последняя правка сделана в браузере; агент не может её откатить")
-        if args.get("expected_revision") != session.revision or entry["after_revision"] != session.revision:
+        _check_expected_snapshot(args, session, ("revision",))
+        if entry["after_revision"] != session.revision:
             raise ValueError("После последней правки документ изменился; прочитайте новое состояние перед откатом")
         await session_manager.update_content(session.token, entry["before_content"], source="mcp_agent")
         return {"status": "rolled_back", "revision": session.revision,
@@ -906,7 +970,9 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         before = session.content
         revision = hashlib.sha256(before.encode("utf-8")).hexdigest()
         expected = args.get("expected_revision")
-        if expected != revision:
+        if args.get("expected_snapshot_id") is not None:
+            _check_expected_snapshot(args, session, ("revision",))
+        elif expected != revision:
             raise ValueError("Документ изменился после get_report_state; загрузите его заново перед правкой")
         new_md, status = edit_section(before, heading, content, mode, args.get("section_id"), revision)
         before_headings = [s.heading for s in sections(before)]
@@ -941,7 +1007,9 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         revision = hashlib.sha256(before.encode("utf-8")).hexdigest()
         if not find:
             raise ValueError("Не указан find")
-        if args.get("expected_revision") != revision:
+        if args.get("expected_snapshot_id") is not None:
+            _check_expected_snapshot(args, session, ("revision",))
+        elif args.get("expected_revision") != revision:
             raise ValueError("Документ изменился после get_report_state; загрузите его заново перед правкой")
         occurrences = before.count(find)
         if occurrences != 1:
@@ -959,8 +1027,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
 
     elif tool_name == "apply_patches":
         before = session.content
-        if args.get("expected_revision") != session.revision:
-            raise ValueError("Документ изменился: перечитайте get_report_state перед пакетной правкой")
+        _check_expected_snapshot(args, session, ("revision",))
         patches = args.get("patches")
         if not isinstance(patches, list) or not 1 <= len(patches) <= 100:
             raise ValueError("Ожидается от 1 до 100 текстовых замен")
@@ -989,9 +1056,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
                 "revision": session.revision, "diff": session.edit_history[-1]["diff"]}
 
     elif tool_name == "update_meta":
-        expected_meta = args.get("expected_meta_revision")
-        if expected_meta != session.meta_revision:
-            raise ValueError("Реквизиты изменились: перечитайте get_report_state перед правкой")
+        _check_expected_snapshot(args, session, ("meta_revision",))
         allowed = (
             "work_theme", "work_number", "work_type", "discipline", "institute",
             "department", "university", "ministry", "city", "year",
@@ -1021,8 +1086,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         }
 
     elif tool_name == "import_profile":
-        if args.get("expected_meta_revision") != session.meta_revision:
-            raise ValueError("Реквизиты изменились: перечитайте get_report_state перед импортом профиля")
+        _check_expected_snapshot(args, session, ("meta_revision",))
         profile = load_profile_input(args)
         merged = profile_metadata(profile, session.meta)
         await session_manager.update_meta(
@@ -1042,8 +1106,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         filename = args.get("filename", "")
         if filename not in session.images:
             raise ValueError("Рисунок не прикреплён к отчёту")
-        if args.get("expected_meta_revision") != session.meta_revision:
-            raise ValueError("Реквизиты отчёта изменились; перечитайте get_report_state")
+        _check_expected_snapshot(args, session, ("meta_revision",))
         fields = ("width_percent", "max_height_mm", "align", "keep_caption_with_image", "page_break_before")
         patch = {key: args[key] for key in fields if key in args}
         if not patch:
@@ -1063,10 +1126,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         filename = args.get("filename", "").strip()
         if not filename:
             raise ValueError("Не указан filename")
-        if args.get("expected_revision") != session.revision:
-            raise ValueError("Документ изменился: перечитайте get_report_state перед удалением рисунка")
-        if args.get("expected_image_revision") != session.image_revision:
-            raise ValueError("Набор изображений изменился: перечитайте list_images перед удалением рисунка")
+        _check_expected_snapshot(args, session, ("revision", "image_revision"))
         if any(image["filename"] == SessionData.sanitize_filename(filename) and image["is_in_report"]
                for image in session.list_images()):
             raise ValueError("Изображение используется в отчёте; сначала удалите ссылку из Markdown")
@@ -1086,10 +1146,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         }
 
     elif tool_name == "delete_images":
-        if args.get("expected_revision") != session.revision:
-            raise ValueError("Документ изменился: перечитайте get_report_state перед удалением изображений")
-        if args.get("expected_image_revision") != session.image_revision:
-            raise ValueError("Набор изображений изменился: перечитайте list_images перед удалением изображений")
+        _check_expected_snapshot(args, session, ("revision", "image_revision"))
         filenames = args.get("filenames")
         if not isinstance(filenames, list) or not 1 <= len(filenames) <= MAX_IMAGES_COUNT:
             raise ValueError(f"Ожидается от 1 до {MAX_IMAGES_COUNT} имён изображений")
@@ -1200,8 +1257,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         return _review_snapshot(session, result) if tool_name == "review_snapshot" else result
 
     elif tool_name == "autofix_typography":
-        if args.get("expected_revision") != session.revision:
-            raise ValueError("Документ изменился: перечитайте get_report_state перед автоисправлением")
+        _check_expected_snapshot(args, session, ("revision",))
         content = session.content
         lines = content.split("\n")
         fixed_lines = []
@@ -1249,6 +1305,29 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         raise ValueError(f"Неизвестный инструмент: {tool_name}")
 
 
+def _tool_is_mutating(tool_name: str, args: Dict[str, Any]) -> bool:
+    """Include a batch in idempotency handling when it contains a mutation."""
+    if tool_name != "batch":
+        return tool_name in MCP_MUTATING_TOOLS
+    return any(call["name"] in MCP_MUTATING_TOOLS for call in validate_batch_calls(args))
+
+
+async def _dispatch_mcp_tool_with_operation(
+    tool_name: str, args: Dict[str, Any], session: SessionData,
+) -> Any:
+    """Deduplicate one mutation and add its complete current snapshot."""
+    operation_id = args.get("operation_id")
+    if operation_id is not None and _tool_is_mutating(tool_name, args):
+        cached = session.operation_cache.lookup(operation_id, args, tool_name)
+        if cached is not None:
+            return cached
+    result = await _dispatch_mcp_tool(tool_name, args, session)
+    result = _decorate_mutation_result(tool_name, result, session)
+    if operation_id is not None and _tool_is_mutating(tool_name, args):
+        session.operation_cache.store(operation_id, args, result, tool_name)
+    return result
+
+
 async def _dispatch_mcp_tool_safely(
     tool_name: str,
     args: Dict[str, Any],
@@ -1261,8 +1340,8 @@ async def _dispatch_mcp_tool_safely(
         mutating = any(call["name"] in MCP_MUTATING_TOOLS for call in calls)
     if mutating:
         async with session.mcp_write_lock:
-            return await _dispatch_mcp_tool(tool_name, args, session)
-    return await _dispatch_mcp_tool(tool_name, args, session)
+            return await _dispatch_mcp_tool_with_operation(tool_name, args, session)
+    return await _dispatch_mcp_tool_with_operation(tool_name, args, session)
 
 
 # ==============================================================================
@@ -1279,6 +1358,7 @@ async def init_session(token: Optional[str] = Query(None)):
         "revision": session.revision,
         "meta_revision": session.meta_revision,
         "image_revision": session.image_revision,
+        "snapshot_id": session.snapshot_id,
         "meta": session.meta,
         "images": session.list_images(),
         "deleted": sorted(session.deleted_images)
@@ -1322,7 +1402,7 @@ async def upload_session_images(
             "client_id": client_id, "image_revision": session.image_revision,
             "timestamp": time.time()
         })
-    return {"uploaded": uploaded}
+    return {"uploaded": uploaded, **_session_snapshot(session)}
 
 
 @router.get("/api/session/{token}/images")
@@ -1332,7 +1412,7 @@ async def get_session_images(token: str):
     return {
         "images": session.list_images(),
         "deleted": sorted(session.deleted_images),
-        "image_revision": session.image_revision,
+        **_session_snapshot(session),
     }
 
 
@@ -1371,7 +1451,7 @@ async def delete_session_image(
     return {
         "status": "deleted" if success else "not_found",
         "filename": filename,
-        "image_revision": session.image_revision,
+        **_session_snapshot(session),
     }
 
 
@@ -1395,7 +1475,9 @@ async def sync_session(token: str, payload: dict = Body(...)):
         if expected != session.revision:
             return Response(
                 content=json.dumps({"status": "conflict", "conflict_type": "content",
-                                    "content": session.content, "revision": session.revision}, ensure_ascii=False),
+                                    "content": session.content, **_session_snapshot(session),
+                                    "conflict": True, "current": _session_snapshot(session),
+                                    "next_action": "refresh_and_retry"}, ensure_ascii=False),
                 status_code=409, media_type="application/json",
             )
         next_content = _apply_content_patches(session.content, payload["content_patches"])
@@ -1407,7 +1489,9 @@ async def sync_session(token: str, payload: dict = Body(...)):
         if expected is not None and expected != session.revision and payload["content"] != session.content:
             return Response(
                 content=json.dumps({"status": "conflict", "conflict_type": "content",
-                                    "content": session.content, "revision": session.revision}, ensure_ascii=False),
+                                    "content": session.content, **_session_snapshot(session),
+                                    "conflict": True, "current": _session_snapshot(session),
+                                    "next_action": "refresh_and_retry"}, ensure_ascii=False),
                 status_code=409, media_type="application/json",
             )
     if "meta" in payload:
@@ -1417,7 +1501,9 @@ async def sync_session(token: str, payload: dict = Body(...)):
         if expected_meta is not None and expected_meta != session.meta_revision and payload["meta"] != session.meta:
             return Response(
                 content=json.dumps({"status": "conflict", "conflict_type": "meta",
-                                    "meta": session.meta, "meta_revision": session.meta_revision}, ensure_ascii=False),
+                                    "meta": session.meta, **_session_snapshot(session),
+                                    "conflict": True, "current": _session_snapshot(session),
+                                    "next_action": "refresh_and_retry"}, ensure_ascii=False),
                 status_code=409, media_type="application/json",
             )
     if next_content is not None and next_content != session.content:
@@ -1429,8 +1515,7 @@ async def sync_session(token: str, payload: dict = Body(...)):
             token, payload["meta"], source="web", client_id=payload.get("client_id")
         )
     session.touch()
-    return {"status": "ok", "token": token, "revision": session.revision,
-            "meta_revision": session.meta_revision}
+    return {"status": "ok", "token": token, **_session_snapshot(session)}
 
 
 @router.get("/api/session/{token}/events")
@@ -1754,14 +1839,20 @@ async def mcp_post_message(
                 }
             }
         except Exception as e:
+            message = f"Ошибка выполнения {tool_name}: {str(e)}"
+            conflict = None
+            if is_conflict_message(str(e)):
+                conflict = conflict_payload(message, _session_revisions(session))
             response_payload = {
                 "jsonrpc": "2.0",
                 "id": req_id,
                 "result": {
                     "content": [
-                        {"type": "text", "text": f"Ошибка выполнения {tool_name}: {str(e)}"}
+                        {"type": "text", "text": json.dumps(conflict, ensure_ascii=False)
+                         if conflict else message}
                     ],
-                    "isError": True
+                    "isError": True,
+                    **({"structuredContent": conflict} if conflict else {}),
                 }
             }
     else:

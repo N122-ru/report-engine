@@ -21,7 +21,10 @@ from .markdown_parser import _image_size
 from .typography import apply_typography_rules, strip_trailing_dot
 from .profile import profile_metadata, validate_profile
 from .image_input import MAX_IMAGE_SIZE, MAX_IMAGES_COUNT
-from .report_safety import MAX_MARKDOWN_BYTES, ReportVerification, add_content_guards, report_digest, validate_detail
+from .report_safety import (
+    MAX_MARKDOWN_BYTES, OperationCache, ReportVerification, add_content_guards,
+    report_digest, validate_detail, with_snapshot,
+)
 
 # BMP is not supported; WebP is checked separately by its RIFF container.
 IMAGE_SIGNATURES = (
@@ -49,6 +52,7 @@ class HeadlessReport:
         self.images: dict[str, bytes] = {}
         self.image_hashes: dict[str, str] = {}
         self.verification = ReportVerification()
+        self.operation_cache = OperationCache()
 
     def _require_report(self) -> ReportMetadata:
         if self.metadata is None:
@@ -57,11 +61,11 @@ class HeadlessReport:
 
     def _revisions(self) -> dict[str, str]:
         metadata = self._require_report().model_dump()
-        return {
+        return with_snapshot({
             "revision": _digest(self.content),
             "meta_revision": _digest(json.dumps(metadata, ensure_ascii=False, sort_keys=True)),
             "image_revision": _digest(json.dumps(self.image_hashes, sort_keys=True)),
-        }
+        })
 
     @staticmethod
     def _sanitize_filename(filename: str) -> str:
@@ -122,19 +126,21 @@ class HeadlessReport:
         self,
         filename: str,
         data: bytes,
-        expected_image_revision: str,
+        expected_image_revision: str | None = None,
         *,
         caption: str = "",
         insert_into_report: bool = False,
         expected_revision: str | None = None,
+        expected_snapshot_id: str | None = None,
     ) -> dict[str, Any]:
         """Upload one image under the current image and optional text revisions."""
         self._require_report()
-        self._check_revision("image_revision", expected_image_revision)
-        if insert_into_report:
-            if expected_revision is None:
-                raise ValueError("Вставка изображения требует revision текста")
-            self._check_revision("revision", expected_revision)
+        self._check_expected(
+            expected_snapshot_id,
+            {"image_revision": expected_image_revision},
+            require_revision=insert_into_report,
+            expected_revision=expected_revision,
+        )
         self._store_image(filename, data, caption, insert_into_report)
         return self._revisions()
 
@@ -159,8 +165,9 @@ class HeadlessReport:
         return safe_name
 
     def upload_images(
-        self, images: list[dict[str, Any]], expected_image_revision: str,
+        self, images: list[dict[str, Any]], expected_image_revision: str | None = None,
         *, expected_revision: str | None = None,
+        expected_snapshot_id: str | None = None,
     ) -> dict[str, Any]:
         """Upload valid items sequentially, collecting per-item validation errors.
 
@@ -171,11 +178,13 @@ class HeadlessReport:
         self._require_report()
         if not isinstance(images, list) or not 1 <= len(images) <= MAX_IMAGES_COUNT:
             raise ValueError(f"Ожидается от 1 до {MAX_IMAGES_COUNT} изображений")
-        self._check_revision("image_revision", expected_image_revision)
-        if any(isinstance(item, dict) and item.get("insert_into_report") for item in images):
-            if expected_revision is None:
-                raise ValueError("Вставка изображения требует revision текста")
-            self._check_revision("revision", expected_revision)
+        requires_revision = any(isinstance(item, dict) and item.get("insert_into_report") for item in images)
+        self._check_expected(
+            expected_snapshot_id,
+            {"image_revision": expected_image_revision},
+            require_revision=requires_revision,
+            expected_revision=expected_revision,
+        )
         results = []
         for item in images:
             filename = item.get("filename") if isinstance(item, dict) else None
@@ -196,9 +205,10 @@ class HeadlessReport:
         return {"uploaded_count": sum(item["ok"] for item in results),
                 "results": results, **self._revisions()}
 
-    def delete_image(self, filename: str, expected_image_revision: str) -> dict[str, Any]:
+    def delete_image(self, filename: str, expected_image_revision: str | None = None,
+                     *, expected_snapshot_id: str | None = None) -> dict[str, Any]:
         self._require_report()
-        self._check_revision("image_revision", expected_image_revision)
+        self._check_expected(expected_snapshot_id, {"image_revision": expected_image_revision})
         safe_name = self._sanitize_filename(filename)
         if any(item["filename"] == safe_name and item["is_in_report"] for item in self.list_images()):
             raise ValueError("Сначала удалите ссылку на изображение из Markdown")
@@ -212,6 +222,31 @@ class HeadlessReport:
     def _check_revision(self, field: str, expected: str) -> None:
         if expected != self._revisions()[field]:
             raise ValueError("Конфликт версий: получите актуальное состояние отчёта")
+
+    def _check_expected(
+        self,
+        expected_snapshot_id: str | None,
+        expected: dict[str, str | None],
+        *,
+        require_revision: bool = False,
+        expected_revision: str | None = None,
+    ) -> None:
+        """Check one atomic snapshot or retain legacy per-part checks."""
+        current = self._revisions()
+        if expected_snapshot_id is not None:
+            if expected_snapshot_id != current["snapshot_id"]:
+                raise ValueError("Конфликт версий: получите актуальное состояние отчёта")
+            return
+        for field, value in expected.items():
+            if value is None:
+                raise ValueError("Конфликт версий: получите актуальное состояние отчёта")
+            if value != current[field]:
+                raise ValueError("Конфликт версий: получите актуальное состояние отчёта")
+        if require_revision:
+            if expected_revision is None:
+                raise ValueError("Вставка изображения требует revision текста")
+            if expected_revision != current["revision"]:
+                raise ValueError("Конфликт версий: получите актуальное состояние отчёта")
 
     @staticmethod
     def _validate_metadata(metadata: dict[str, Any], *, allow_profile_logo: bool = False) -> ReportMetadata:
@@ -258,9 +293,10 @@ class HeadlessReport:
             **common,
         }
 
-    def update_meta(self, fields: dict[str, Any], expected_meta_revision: str) -> dict[str, Any]:
+    def update_meta(self, fields: dict[str, Any], expected_meta_revision: str | None = None,
+                    *, expected_snapshot_id: str | None = None) -> dict[str, Any]:
         """Update only the supplied metadata using a fresh meta_revision."""
-        self._check_revision("meta_revision", expected_meta_revision)
+        self._check_expected(expected_snapshot_id, {"meta_revision": expected_meta_revision})
         if not fields:
             raise ValueError("Не переданы реквизиты для обновления")
         metadata = self._validate_metadata({**self._require_report().model_dump(), **fields})
@@ -269,13 +305,16 @@ class HeadlessReport:
         self.metadata = metadata
         return self._revisions()
 
-    def import_profile(self, profile: dict[str, Any], expected_meta_revision: str | None = None) -> dict[str, Any]:
+    def import_profile(
+        self, profile: dict[str, Any], expected_meta_revision: str | None = None,
+        *, expected_snapshot_id: str | None = None,
+    ) -> dict[str, Any]:
         """Import a portable profile, creating the in-memory report when needed."""
         validated = validate_profile(profile)
         if self.metadata is not None:
-            if expected_meta_revision is None:
+            if expected_snapshot_id is None and expected_meta_revision is None:
                 raise ValueError("Импорт существующего отчёта требует meta_revision")
-            self._check_revision("meta_revision", expected_meta_revision)
+            self._check_expected(expected_snapshot_id, {"meta_revision": expected_meta_revision})
         metadata = profile_metadata(validated)
         updated = self._validate_metadata(metadata, allow_profile_logo=True)
         if updated != self.metadata:
@@ -286,10 +325,11 @@ class HeadlessReport:
         return result
 
     def append_or_update_section(
-        self, section_heading: str, section_content: str, expected_revision: str,
+        self, section_heading: str, section_content: str, expected_revision: str | None = None,
+        *, expected_snapshot_id: str | None = None,
     ) -> dict[str, Any]:
         """Add a section or replace its body while preserving adjacent sections."""
-        self._check_revision("revision", expected_revision)
+        self._check_expected(expected_snapshot_id, {"revision": expected_revision})
         heading = section_heading.strip()
         if not re.fullmatch(r"#{1,6} [^\r\n]+", heading):
             raise ValueError("Заголовок должен быть одной строкой Markdown с #")
@@ -315,8 +355,9 @@ class HeadlessReport:
         self.content = next_content
         return self._revisions()
 
-    def autofix_typography(self, expected_revision: str) -> dict[str, Any]:
-        self._check_revision("revision", expected_revision)
+    def autofix_typography(self, expected_revision: str | None = None,
+                           *, expected_snapshot_id: str | None = None) -> dict[str, Any]:
+        self._check_expected(expected_snapshot_id, {"revision": expected_revision})
         fixed_lines = []
         in_code = False
         for line in self.content.split("\n"):
@@ -366,16 +407,21 @@ class HeadlessReport:
         return self.get_report_state() | {"lint": self._lint_result()}
 
     def export_report(
-        self, filename: str, expected_revision: str, expected_meta_revision: str,
-        expected_image_revision: str, format: str | None = None,
+        self, filename: str, expected_revision: str | None = None,
+        expected_meta_revision: str | None = None, expected_image_revision: str | None = None,
+        format: str | None = None,
         confirm_blocked_export: bool = False,
+        *, expected_snapshot_id: str | None = None,
     ) -> dict[str, Any]:
         """Export a new DOCX or PDF to the allowed directory without overwriting."""
-        for field, expected in (
-            ("revision", expected_revision), ("meta_revision", expected_meta_revision),
-            ("image_revision", expected_image_revision),
-        ):
-            self._check_revision(field, expected)
+        if expected_snapshot_id is not None:
+            self._check_expected(expected_snapshot_id, {})
+        else:
+            self._check_expected(expected_snapshot_id, {
+                "revision": expected_revision,
+                "meta_revision": expected_meta_revision,
+                "image_revision": expected_image_revision,
+            })
         self.verification.require_export(self._revisions(), confirm_blocked_export)
         if (
             not filename or len(filename) > 128 or filename.startswith(".")

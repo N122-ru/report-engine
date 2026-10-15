@@ -28,7 +28,7 @@ Own the FastAPI application that validates reports, generates DOCX/PDF files, se
 - `agent_resources.py` serves the canonical core and five allowlisted references in source/frozen runtimes. `get_capabilities` describes these resources, their UTF-8 hash/size versions, and runtime limits; `write_report` embeds only the core. Both MCP transports expose `agent_onboarding` and short Russian onboarding instructions in `initialize`; the local skill is client cache only and is never stored by the server.
 - Onboarding has no questionnaire: at most one short question clarifies one-shot versus ongoing use. One-shot skips the playbook; ongoing or unknown use proceeds autonomously. The agent maintains client optimizations after every session without changing the server manifest; preserve the environment checklist and manifest header.
 - Live and headless MCP share the `snapshot_id` contract, structured revision conflicts, operation-id replay protection, and batch result references; legacy revision arguments remain supported.
-- Live `file_path` sources are disabled unless `REPORT_ENGINE_MCP_FILE_ROOT` is an absolute existing directory; resolved paths and image signatures are checked before reading. Operation replay caches are bounded to 8 MiB with a 256 KiB per-result limit.
+- `app/engine/local_files.py` owns the server-local file-source policy: headless always reads paths, the portable web launcher enables them at startup, and networked deployments stay base64-only. Live `file_path` handling rejects other runs with an actionable error, omits the argument from `tools/list` schemas there, and still validates image signatures before storing. Operation replay caches are bounded to 8 MiB with a 256 KiB per-result limit.
 
 ## Work Guidance
 

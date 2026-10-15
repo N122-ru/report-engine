@@ -215,6 +215,24 @@ def test_capabilities_advertise_runtime_and_limits(transport):
         }
 
 
+def test_live_capabilities_follow_local_file_policy(monkeypatch):
+    from app.engine import local_files
+
+    client = TestClient(app)
+    token = client.get("/api/session/init").json()["token"]
+
+    def capabilities():
+        result = client.post(f"/api/mcp/messages?token={token}", json={
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": {"name": "get_capabilities", "arguments": {}},
+        }).json()["result"]
+        return json.loads(result["content"][0]["text"])
+
+    assert capabilities()["file_path"] is False
+    monkeypatch.setattr(local_files, "_LOCAL_FILES_ENABLED", True)
+    assert capabilities()["file_path"] == "standalone"
+
+
 def test_noop_metadata_retains_verification_and_invalid_detail_is_rejected(transport):
     name, call, write, _, _, _, _ = transport
     write("Выполнено исследование.")
@@ -272,10 +290,11 @@ def test_agent_onboarding_teaches_and_maintains_client_optimizations(include_fil
 
     assert "чеклиста окружения и своего опыта" in optimizations
     assert "file_path" in optimizations
-    assert "на одной машине с сервером" in optimizations
-    assert "standalone" in optimizations
     assert "get_capabilities" in optimizations
     assert "base64" in optimizations
+    assert "base64_data" in optimizations
+    expected_availability = "Автономная сборка" if include_file_path else "Сетевая сборка"
+    assert expected_availability in optimizations
     assert "байты скриптом, не руками" in optimizations
     assert "Не кодируй большие файлы по памяти частями" in optimizations
     assert "batch вместо серий" in optimizations
@@ -288,6 +307,20 @@ def test_agent_onboarding_teaches_and_maintains_client_optimizations(include_fil
     assert "что сработало, что сломалось" in optimizations
     assert "не трогая серверный manifest-блок" in optimizations
     assert "Клиентские шорткаты" not in text
+
+
+def test_agent_onboarding_reports_local_file_access_when_enabled(monkeypatch):
+    from backend.app.engine import local_files
+    from backend.app.engine.agent_resources import agent_onboarding_prompt
+
+    text = agent_onboarding_prompt("TestClient")
+    assert "Сетевая сборка" in text
+    assert "Автономная сборка" not in text
+
+    monkeypatch.setattr(local_files, "_LOCAL_FILES_ENABLED", True)
+    text = agent_onboarding_prompt("TestClient")
+    assert "Автономная сборка" in text
+    assert "Сетевая сборка" not in text
 
 
 @pytest.mark.anyio

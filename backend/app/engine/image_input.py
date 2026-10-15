@@ -14,33 +14,17 @@ IMAGE_SOURCE_SCHEMA = {
 }
 
 
-def resolve_file_path(file_path: str, *, root: Path | None = None) -> Path:
-    """Resolve a local source and, when supplied, keep it below an allowlisted root."""
+def resolve_file_path(file_path: str) -> Path:
+    """Resolve a server-local source path, expanding `~` and relative paths."""
     if not isinstance(file_path, str) or not file_path.strip():
         raise ValueError("Параметр file_path должен быть непустой строкой")
     path = Path(file_path).expanduser()
-    if root is None:
-        if not path.is_absolute():
-            path = Path.cwd() / path
-        try:
-            return path.resolve(strict=True)
-        except OSError as exc:
-            raise ValueError("Файл изображения не найден") from exc
-    try:
-        root = root.resolve(strict=True)
-    except OSError as exc:
-        raise ValueError("Файловые источники отключены") from exc
-    if not root.is_dir():
-        raise ValueError("Файловые источники отключены")
     if not path.is_absolute():
-        path = root / path
+        path = Path.cwd() / path
     try:
-        resolved = path.resolve(strict=True)
+        return path.resolve(strict=True)
     except OSError as exc:
         raise ValueError("Файл изображения не найден") from exc
-    if resolved == root or root not in resolved.parents:
-        raise ValueError("Путь к файлу выходит за пределы разрешённого корня")
-    return resolved
 
 
 def validate_image_data(data: bytes) -> None:
@@ -55,12 +39,13 @@ def validate_image_data(data: bytes) -> None:
 
 
 def load_image_input(
-    args: dict[str, Any], decode_base64: Callable[[str], bytes], *, file_root: Path | None = None,
+    args: dict[str, Any], decode_base64: Callable[[str], bytes],
 ) -> bytes:
     """Read exactly one image source with bounded local-file reads.
 
     The supplied decoder preserves each transport's existing base64 validation.
-    Local paths refer to the server filesystem, not the remote agent's machine.
+    Local paths refer to the server filesystem and are admitted only by callers
+    that already verified a local run; reads stay bounded here.
     """
     encoded = args.get("base64_data")
     file_path = args.get("file_path")
@@ -72,7 +57,7 @@ def load_image_input(
         return decode_base64(encoded)
     if not isinstance(file_path, str) or not file_path.strip():
         raise ValueError("Параметр file_path должен быть непустой строкой")
-    path = resolve_file_path(file_path, root=file_root)
+    path = resolve_file_path(file_path)
     try:
         if not path.is_file():
             raise ValueError("Файл изображения не найден")

@@ -437,34 +437,7 @@ def test_mcp_update_meta_merges_and_validates():
 def test_mcp_import_profile_applies_both_subject_and_title_requisites_atomically():
     token = client.get("/api/session/init").json()["token"]
     state = client.get(f"/api/session/init?token={token}").json()
-    profile = {
-        "format": "report-engine-profile",
-        "version": 1,
-        "subject": {
-            "id": "subj_profile",
-            "name": "Сетевые технологии",
-            "institute": "Институт технологий",
-            "department": "Кафедра сетей",
-            "teachers": [{"fio": "И.И. Иванов", "role": "доцент"}],
-            "custom_instructions": "Сохранять команды.",
-            "last_work_number": 4,
-        },
-        "meta": {
-            "university": "Учебный университет",
-            "ministry": "Министерство образования",
-            "logo_mode": "none",
-            "city": "Москва",
-            "institute": "Институт технологий",
-            "department": "Кафедра сетей",
-            "doc_type": "ОТЧЕТ",
-            "work_type": "о выполнении лабораторной работы",
-            "work_number": 5,
-            "discipline": "Сетевые технологии",
-            "students": [{"fio": "П.П. Петров", "group": "ИВТ-101"}],
-            "teachers": [{"fio": "И.И. Иванов", "role": "доцент"}],
-            "year": 2026,
-        },
-    }
+    profile = _sample_profile_payload()
     result, payload = _call_report_tool(token, "import_profile", {
         "profile": profile,
         "expected_meta_revision": state["meta_revision"],
@@ -482,6 +455,32 @@ def test_mcp_import_profile_applies_both_subject_and_title_requisites_atomically
         "expected_meta_revision": state["meta_revision"],
     })
     assert stale["isError"] is True
+
+
+def test_mcp_import_profile_file_path_requires_local_run(tmp_path, monkeypatch):
+    from app.engine import local_files
+
+    token = client.get("/api/session/init").json()["token"]
+    state = client.get(f"/api/session/init?token={token}").json()
+    source = tmp_path / "profile.json"
+    source.write_text(json.dumps(_sample_profile_payload(), ensure_ascii=False), encoding="utf-8")
+
+    error, _ = _call_report_tool(token, "import_profile", {
+        "file_path": str(source), "expected_meta_revision": state["meta_revision"],
+    })
+    assert error["isError"] is True
+    assert "автономных сборках" in error["content"][0]["text"]
+    assert "объектом profile" in error["content"][0]["text"]
+
+    monkeypatch.setattr(local_files, "_LOCAL_FILES_ENABLED", True)
+    current = client.get(f"/api/session/init?token={token}").json()
+    result, payload = _call_report_tool(token, "import_profile", {
+        "file_path": str(source), "expected_meta_revision": current["meta_revision"],
+    })
+    assert result["isError"] is False, payload
+    assert payload["subject"]["name"] == "Сетевые технологии"
+    imported = client.get(f"/api/session/init?token={token}").json()
+    assert imported["meta"]["discipline"] == "Сетевые технологии"
 
 
 def test_mcp_delete_image_tool():
@@ -646,6 +645,38 @@ def _call_report_tool(token, name, arguments):
     return result, json.loads(result["content"][0]["text"]) if not result["isError"] else None
 
 
+def _sample_profile_payload():
+    """Return a complete fictional profile shared by import tests."""
+    return {
+        "format": "report-engine-profile",
+        "version": 1,
+        "subject": {
+            "id": "subj_profile",
+            "name": "Сетевые технологии",
+            "institute": "Институт технологий",
+            "department": "Кафедра сетей",
+            "teachers": [{"fio": "И.И. Иванов", "role": "доцент"}],
+            "custom_instructions": "Сохранять команды.",
+            "last_work_number": 4,
+        },
+        "meta": {
+            "university": "Учебный университет",
+            "ministry": "Министерство образования",
+            "logo_mode": "none",
+            "city": "Москва",
+            "institute": "Институт технологий",
+            "department": "Кафедра сетей",
+            "doc_type": "ОТЧЕТ",
+            "work_type": "о выполнении лабораторной работы",
+            "work_number": 5,
+            "discipline": "Сетевые технологии",
+            "students": [{"fio": "П.П. Петров", "group": "ИВТ-101"}],
+            "teachers": [{"fio": "И.И. Иванов", "role": "доцент"}],
+            "year": 2026,
+        },
+    }
+
+
 def test_mcp_batch_runs_mutation_and_status_calls_in_order():
     token = client.get("/api/session/init").json()["token"]
     _, state = _call_report_tool(token, "get_report_state", {})
@@ -734,13 +765,15 @@ async def test_mcp_batch_holds_write_lock_for_entire_sequence_and_allows_reads()
                 await asyncio.gather(task, return_exceptions=True)
 
 
-def test_mcp_upload_image_reads_file_path_and_inserts_markdown(tmp_path, monkeypatch):
+def test_mcp_upload_image_reads_file_path_in_local_run(tmp_path, monkeypatch):
+    from app.engine import local_files
+
     token = client.get("/api/session/init").json()["token"]
     _, state = _call_report_tool(token, "get_report_state", {})
     sample = b"\x89PNG\r\n\x1a\n" + b"payload"
     path = tmp_path / "screen.png"
     path.write_bytes(sample)
-    monkeypatch.setenv("REPORT_ENGINE_MCP_FILE_ROOT", str(tmp_path))
+    monkeypatch.setattr(local_files, "_LOCAL_FILES_ENABLED", True)
     result, payload = _call_report_tool(token, "upload_image", {
         "filename": "Снимок экрана.png", "file_path": str(path),
         "expected_revision": state["revision"], "caption": "Снимок", "insert_into_report": True,
@@ -751,59 +784,64 @@ def test_mcp_upload_image_reads_file_path_and_inserts_markdown(tmp_path, monkeyp
     assert "![Снимок](Снимок_экрана.png)" in client.get(f"/api/session/init?token={token}").json()["content"]
 
 
-def test_live_file_path_is_rooted_and_validates_image_signature(tmp_path, monkeypatch):
+def test_live_file_path_requires_local_run_and_schemas_hide_it(tmp_path):
     token = client.get("/api/session/init").json()["token"]
     _, state = _call_report_tool(token, "get_report_state", {})
-    outside = tmp_path / "outside.png"
-    outside.write_bytes(b"\x89PNG\r\n\x1a\n")
-    root = tmp_path / "allowed"
-    root.mkdir()
-    inside = root / "inside.png"
-    inside.write_bytes(b"\x89PNG\r\n\x1a\n")
-    symlink = root / "link.png"
-    symlink.symlink_to(outside)
+    path = tmp_path / "screen.png"
+    path.write_bytes(b"\x89PNG\r\n\x1a\n")
 
     error, _ = _call_report_tool(token, "upload_image", {
-        "filename": "disabled.png", "file_path": str(inside),
+        "filename": "screen.png", "file_path": str(path),
         "expected_revision": state["revision"],
     })
-    assert error["isError"] and "Файловые источники отключены" in error["content"][0]["text"]
+    assert error["isError"] is True
+    assert "автономных сборках" in error["content"][0]["text"]
+    assert "base64_data" in error["content"][0]["text"]
+    assert client.get(f"/api/session/{token}/images").json()["images"] == []
 
-    monkeypatch.setenv("REPORT_ENGINE_MCP_FILE_ROOT", str(root))
-    error, payload = _call_report_tool(token, "upload_image", {
-        "filename": "inside.png", "file_path": str(inside),
-        "expected_revision": state["revision"],
-    })
-    assert not error["isError"], payload
+    schemas = {tool["name"]: tool for tool in _list_all_mcp_tools(token)}
+    for name in ("upload_image", "upload_images", "import_profile"):
+        assert "file_path" not in json.dumps(schemas[name], ensure_ascii=False), name
+    assert "base64_data" in schemas["upload_image"]["inputSchema"]["required"]
+    item = schemas["upload_images"]["inputSchema"]["properties"]["images"]["items"]
+    assert "base64_data" in item["required"]
+    assert schemas["import_profile"]["inputSchema"]["required"] == ["profile"]
+
+    _, caps = _call_report_tool(token, "get_capabilities", {})
+    assert caps["file_path"] is False
+
+
+def test_live_file_path_validates_image_signature_in_local_run(tmp_path, monkeypatch):
+    from app.engine import local_files
+
+    token = client.get("/api/session/init").json()["token"]
     _, state = _call_report_tool(token, "get_report_state", {})
-
-    for path, message in ((root / "../outside.png", "корня"), (symlink, "корня")):
-        error, _ = _call_report_tool(token, "upload_image", {
-            "filename": "rejected.png", "file_path": str(path),
-            "expected_revision": state["revision"],
-        })
-        assert error["isError"] and message in error["content"][0]["text"]
-
-    non_image = root / "notes.txt"
-    non_image.write_text("not an image", encoding="utf-8")
+    notes = tmp_path / "notes.txt"
+    notes.write_text("not an image", encoding="utf-8")
+    monkeypatch.setattr(local_files, "_LOCAL_FILES_ENABLED", True)
     error, _ = _call_report_tool(token, "upload_image", {
-        "filename": "notes.png", "file_path": str(non_image),
+        "filename": "notes.png", "file_path": str(notes),
         "expected_revision": state["revision"],
     })
-    assert error["isError"] and "поддерживаемое изображение" in error["content"][0]["text"]
+    assert error["isError"] is True
+    assert "поддерживаемое изображение" in error["content"][0]["text"]
+    assert client.get(f"/api/session/{token}/images").json()["images"] == []
 
 
 @pytest.mark.parametrize("source, message", [
     ({}, "base64_data или file_path"),
     ({"file_path": "screen.png", "base64_data": "AAAA"}, "base64_data или file_path"),
     ({"file_path": "missing.png"}, "не найден"),
+    ({"file_path": ""}, "непустой строкой"),
 ])
 def test_mcp_upload_image_rejects_invalid_file_sources(tmp_path, source, message, monkeypatch):
+    from app.engine import local_files
+
     token = client.get("/api/session/init").json()["token"]
     _, state = _call_report_tool(token, "get_report_state", {})
-    if "file_path" in source:
+    monkeypatch.setattr(local_files, "_LOCAL_FILES_ENABLED", True)
+    if source.get("file_path"):
         source = {**source, "file_path": str(tmp_path / source["file_path"])}
-        monkeypatch.setenv("REPORT_ENGINE_MCP_FILE_ROOT", str(tmp_path))
     result, _ = _call_report_tool(token, "upload_image", {
         "filename": "screen.png", "expected_revision": state["revision"], **source,
     })
@@ -813,6 +851,7 @@ def test_mcp_upload_image_rejects_invalid_file_sources(tmp_path, source, message
 
 
 def test_mcp_upload_images_accepts_files_and_remains_atomic(tmp_path, monkeypatch):
+    from app.engine import local_files
     from app.engine.sessions import MAX_IMAGE_SIZE
 
     token = client.get("/api/session/init").json()["token"]
@@ -822,7 +861,7 @@ def test_mcp_upload_images_accepts_files_and_remains_atomic(tmp_path, monkeypatc
     large = tmp_path / "large.png"
     with large.open("wb") as output:
         output.truncate(MAX_IMAGE_SIZE + 1)
-    monkeypatch.setenv("REPORT_ENGINE_MCP_FILE_ROOT", str(tmp_path))
+    monkeypatch.setattr(local_files, "_LOCAL_FILES_ENABLED", True)
     invalid, _ = _call_report_tool(token, "upload_images", {
         "expected_revision": state["revision"], "images": [
             {"filename": "one.png", "file_path": str(path)},
@@ -851,13 +890,13 @@ def test_mcp_upload_images_accepts_files_and_remains_atomic(tmp_path, monkeypatc
 async def test_mcp_file_reads_leave_loop_responsive_and_recheck_revision(tmp_path, monkeypatch, tool):
     import asyncio
     import threading
-    from app.engine import mcp_router
+    from app.engine import local_files, mcp_router
     from app.engine.sessions import session_manager
 
     session = session_manager.get_or_create()
     path = tmp_path / "screen.png"
     path.write_bytes(b"\x89PNG\r\n\x1a\n")
-    monkeypatch.setenv("REPORT_ENGINE_MCP_FILE_ROOT", str(tmp_path))
+    monkeypatch.setattr(local_files, "_LOCAL_FILES_ENABLED", True)
     started = threading.Event()
     release = threading.Event()
     original = mcp_router.load_image_input

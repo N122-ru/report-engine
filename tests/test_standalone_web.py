@@ -68,6 +68,16 @@ def test_standalone_contract_uses_loopback_host():
     assert LOOPBACK_HOST == "127.0.0.1"
 
 
+def test_portable_web_launcher_enables_local_file_sources(monkeypatch):
+    from backend.app import standalone_web
+    from backend.app.engine import local_files
+
+    monkeypatch.setattr(local_files, "_LOCAL_FILES_ENABLED", False)
+    monkeypatch.setattr(standalone_web, "ensure_frontend_dist", lambda *args, **kwargs: None)
+    standalone_web.create_application(port=8000)
+    assert local_files.local_files_enabled() is True
+
+
 @pytest.mark.parametrize("port", [0, -1, 65536, True, "8000"])
 def test_invalid_ports_are_rejected(port):
     with pytest.raises(ValueError, match="Порт"):

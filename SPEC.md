@@ -64,6 +64,9 @@ standards compliance or institution-specific requirements.
 - Live tools read state/media, edit sections or revision-bound blocks, apply patches,
   update metadata/image layouts, inspect recent edits, roll back the last agent edit,
   lint, and fix typography. Writes must not silently overwrite adjacent sections.
+- Server-local file sources are a runtime mode, not a setting: headless and the
+  portable web read `file_path`; Docker and source web do not, and their
+  `tools/list` schemas omit it.
 - `assets/SKILL.md`, exposed as `report://rules/gost732` and through MCP prompts,
   is the compact canonical report-agent core. `write_report` embeds only this core;
   domain references are loaded on demand from `report://reference/figures`,
@@ -79,8 +82,12 @@ standards compliance or institution-specific requirements.
 
 - Both transports expose `get_capabilities` without arguments: `transport`
   (`live` or `headless`), `contract_version`, runtime `pdf_export`/`pdf_converter`,
-  `file_path: true`, `limits` (`image_bytes: 15728640`, `images_count: 150`,
+  `file_path` (`"standalone"` when the process may read server-local sources —
+  headless always, the portable web after its launcher enables them — and `false`
+  in networked deployments), `limits` (`image_bytes: 15728640`, `images_count: 150`,
   `markdown_bytes: 512000`), and `reference_resources` (the five reference URIs).
+  `tools/list` omits `file_path` from image and profile schemas whenever the
+  process cannot read it.
 - `get_report_state` retains its default response and adds `verify_state` with
   `lint_after_last_change` and `export_allowed` booleans. Optional `detail: "digest"`
   returns only `sections` (`heading`, `word_count` for the section body including
@@ -158,8 +165,8 @@ standards compliance or institution-specific requirements.
 - Web exports/imports profiles through the file menu; import adds/selects a preset
   and applies metadata through the existing conflict path without replacing the body/media.
 - Live and headless `import_profile` accept exactly one of `profile` or `file_path`.
-  File paths are local to the server and relative paths use its working directory.
-  Live import requires `expected_meta_revision` or `expected_snapshot_id`; headless import creates a report
+  File paths are local to the server and relative paths use its working directory;
+  live accepts them only in a local run. Live import requires `expected_meta_revision` or `expected_snapshot_id`; headless import creates a report
   if absent, otherwise requires one of those checks. Subject fields override corresponding meta fields.
 - Web/live merge profile values into current metadata. Headless rebuilds metadata
   from the profile and defaults for report-only fields, retaining body/media.
@@ -214,10 +221,12 @@ creates its default `output` directory.
   references may supply arguments from previous calls. Live mutating batches hold
   one session MCP write lock across the complete sequence; read-only calls remain
   available without that lock.
-- Image uploads accept exactly one of `base64_data` or `file_path` per image.
-  Paths are server-local, expand `~`, and resolve relative to the process cwd;
-  reads are bounded and run off the event loop in live MCP. The shared image
-  limits are 15 MiB per file and 150 images per report, including HTTP generation.
+- Image uploads accept exactly one of `base64_data` or `file_path` per image;
+  live accepts `file_path` only when the server runs locally (portable web), and
+  networked deployments omit the argument from schemas and reject it with an
+  actionable error. Paths are server-local, expand `~`, and resolve relative to
+  the process cwd; reads are bounded and run off the event loop in live MCP. The
+  shared image limits are 15 MiB per file and 150 images per report, including HTTP generation.
   DOCX auditing retains its separate 25 MiB limit; error text follows each limit.
 - Live `upload_images` retains atomic validation and `after_block_id` insertion
   with `expected_revision`. Headless `upload_images` checks one
@@ -297,6 +306,8 @@ convenience launchers: `start-web.sh` / `start-web.bat`.
   browser storage is origin-specific. An explicit `--port` change is allowed.
 - Serve the full editor, preview, normcontrol, bibliography, project JSON, and
   profile import/export behavior described in the product spec.
+- Enable server-local `file_path` sources at startup: this launcher runs on the
+  user's machine, unlike Docker or source web, which stay base64-only.
 - Also expose **live SSE MCP** at `/api/mcp/sse?token=...`; use the browser MCP
   modal for session configuration. This executable is not a stdio MCP server
   and does not depend on the headless process.

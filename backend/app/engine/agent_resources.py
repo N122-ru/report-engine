@@ -1,11 +1,11 @@
 """Locate the canonical core and allowlisted references in source and frozen runtimes."""
 
 import hashlib
-import os
 import sys
 from pathlib import Path
 
 from .image_input import MAX_IMAGE_SIZE, MAX_IMAGES_COUNT
+from .local_files import local_files_enabled
 from .pdf_converter import pdf_export_status
 from .report_safety import MAX_MARKDOWN_BYTES
 
@@ -105,9 +105,10 @@ def agent_onboarding_prompt(
         if notes.strip() else ""
     )
     file_path_availability = (
-        "В standalone доступны пути на машине сервера."
-        if include_file_path else
-        "В live доступность путей ограничена file_path из get_capabilities."
+        "Автономная сборка: file_path читает файлы на этой машине без ограничения каталога."
+        if include_file_path or local_files_enabled() else
+        "Сетевая сборка: file_path недоступен; изображения передавай через base64_data, "
+        "профиль — объектом profile."
     )
     return (
         f"Клиентский агент «{client_agent.strip()}» сам изучает окружение без анкеты.\n"
@@ -140,8 +141,8 @@ def agent_onboarding_prompt(
         "### Клиентские оптимизации\n"
         "Сам записывай, как в твоей системе удобнее и стабильнее работать с сервером, "
         "на основе чеклиста окружения и своего опыта.\n"
-        "- Подготовка и заливка изображений: предпочитай file_path, когда агент на одной машине с сервером "
-        "или в standalone и путь разрешён get_capabilities; иначе используй base64. "
+        "- Подготовка и заливка изображений: сначала проверь file_path в get_capabilities; "
+        "если пути доступны, предпочитай file_path, иначе передавай base64_data. "
         "Готовь байты скриптом, не руками. Не кодируй большие файлы по памяти частями. "
         f"{file_path_availability}\n"
         "- Используй batch вместо серий одинаковых вызовов.\n"
@@ -170,11 +171,7 @@ def get_capabilities(transport: str) -> dict:
         {"name": name, "available_in": "live" if transport == "headless" else "headless"}
         for name in sorted(other - own)
     ]
-    file_path: object = "standalone" if transport == "headless" else False
-    if transport == "live":
-        root = live_file_root()
-        if root is not None:
-            file_path = {"root": str(root)}
+    file_path: object = "standalone" if transport == "headless" or local_files_enabled() else False
     return {
         "transport": transport, "contract_version": CONTRACT_VERSION,
         **pdf_export_status(), "file_path": file_path,
@@ -184,18 +181,3 @@ def get_capabilities(transport: str) -> dict:
         "resources": resource_versions(),
         "tools_diff": tools_diff,
     }
-
-
-def live_file_root() -> Path | None:
-    """Return the valid live-MCP file root configured by the environment."""
-    raw = os.environ.get("REPORT_ENGINE_MCP_FILE_ROOT")
-    if not raw:
-        return None
-    path = Path(raw).expanduser()
-    if not path.is_absolute():
-        return None
-    try:
-        resolved = path.resolve(strict=True)
-    except OSError:
-        return None
-    return resolved if resolved.is_dir() else None

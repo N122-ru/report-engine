@@ -6,6 +6,7 @@ Remote agents connect to the user's session using the MCP SSE transport.
 import sys
 import os
 import io
+import copy
 import json
 import re
 import time
@@ -37,9 +38,10 @@ from .report_safety import (
     report_digest, require_revision_guard, validate_detail, with_snapshot,
 )
 from .agent_resources import (
-    agent_onboarding_prompt, get_capabilities, initialize_instructions, live_file_root,
+    agent_onboarding_prompt, get_capabilities, initialize_instructions,
     read_agent_asset, read_reference, reference_resources,
 )
+from .local_files import local_files_enabled
 from .pdf_converter import convert_docx_to_pdf
 from .security import PDF_SEMAPHORE
 from ..version import APP_VERSION
@@ -592,12 +594,75 @@ def _add_unified_mutation_fields() -> None:
 
 _add_unified_mutation_fields()
 
+# Live tools whose schemas advertise optional server-local file sources.
+_LOCAL_FILE_TOOL_NAMES = {"upload_image", "upload_images", "import_profile"}
+
+# Base64-only descriptions for deployments where file_path is not readable.
+_NETWORKED_TOOL_DESCRIPTIONS = {
+    "upload_image": (
+        "Загружает изображение (график matplotlib, схему) в сессию отчета. "
+        "Изображение отображается в браузере в панели медиа и на страницах макета А4. "
+        "Принимает имя файла и данные base64. Опционально может сразу вставить ссылку в Markdown."
+    ),
+    "upload_images": (
+        "Атомарно загружает несколько рисунков из base64_data и при необходимости вставляет "
+        "их после блоков из текущего outline."
+    ),
+    "import_profile": (
+        "Импортирует профиль дисциплины и титульного листа формата report-engine-profile версии 1. "
+        "Принимает JSON-объект profile. Требует свежую meta_revision."
+    ),
+}
+
+
+def _require_base64_source(schema: Dict[str, Any]) -> None:
+    """Make base64_data mandatory in an image schema that no longer offers file_path."""
+    schema.pop("oneOf", None)
+    required = [field for field in schema.get("required", []) if field != "file_path"]
+    if "base64_data" not in required:
+        required.append("base64_data")
+    schema["required"] = required
+
+
+def _without_file_path(tool: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy one live tool without any trace of the server-local file source."""
+    copy_of_tool = copy.deepcopy(tool)
+    copy_of_tool["description"] = _NETWORKED_TOOL_DESCRIPTIONS[tool["name"]]
+    schema = copy_of_tool["inputSchema"]
+    schema["properties"].pop("file_path", None)
+    if tool["name"] == "import_profile":
+        schema["required"] = ["profile"]
+        return copy_of_tool
+    if tool["name"] == "upload_images":
+        item = schema["properties"]["images"]["items"]
+        item["properties"].pop("file_path", None)
+        _require_base64_source(item)
+    else:
+        _require_base64_source(schema)
+    return copy_of_tool
+
+
+def _live_tool_definitions() -> List[Dict[str, Any]]:
+    """Return live tools whose schemas match this run's file-source policy.
+
+    Networked deployments must not advertise file_path: an agent would
+    otherwise discover, call, and fail on an argument this process refuses
+    to read. Local distributions keep the full schemas.
+    """
+    if local_files_enabled():
+        return MCP_LIVE_TOOLS
+    return [
+        _without_file_path(tool) if tool["name"] in _LOCAL_FILE_TOOL_NAMES else tool
+        for tool in MCP_LIVE_TOOLS
+    ]
+
 
 def _ordered_mcp_tools() -> List[Dict[str, Any]]:
     """Return a stable discovery order with the compatible core first."""
-    by_name = {tool["name"]: tool for tool in MCP_LIVE_TOOLS}
+    tools = _live_tool_definitions()
+    by_name = {tool["name"]: tool for tool in tools}
     core = [by_name[name] for name in MCP_CORE_TOOL_NAMES]
-    advanced = [tool for tool in MCP_LIVE_TOOLS if tool["name"] not in MCP_CORE_TOOL_NAMES]
+    advanced = [tool for tool in tools if tool["name"] not in MCP_CORE_TOOL_NAMES]
     return core + advanced
 
 
@@ -690,12 +755,13 @@ def _validate_live_revision_guard(tool_name: str, args: Dict[str, Any]) -> None:
     require_revision_guard(args, fields)
 
 
-def _require_live_file_root():
-    """Reject server-file sources unless an absolute allowlisted root is configured."""
-    root = live_file_root()
-    if root is None:
-        raise ValueError("Файловые источники отключены")
-    return root
+def _require_local_file_access(fallback: str) -> None:
+    """Reject server-local file sources outside local distributions."""
+    if not local_files_enabled():
+        raise ValueError(
+            "Чтение файлов на машине сервера доступно только в автономных сборках "
+            f"(headless или переносимый web); {fallback}"
+        )
 
 
 def _decorate_mutation_result(
@@ -819,10 +885,10 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         if not filename:
             raise ValueError("Не указан filename")
 
-        file_root = _require_live_file_root() if "file_path" in args else None
+        if "file_path" in args:
+            _require_local_file_access("передайте изображение через base64_data")
         raw_bytes = await asyncio.to_thread(
             load_image_input, args, lambda encoded: _decode_image_data(encoded.strip(), filename),
-            file_root=file_root,
         )
         if "file_path" in args:
             validate_image_data(raw_bytes)
@@ -881,10 +947,10 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
             if name in names:
                 raise ValueError(f"Повторяющееся имя изображения: {name}")
             names.add(name)
-            file_root = _require_live_file_root() if "file_path" in item else None
+            if "file_path" in item:
+                _require_local_file_access("передайте изображение через base64_data")
             raw = await asyncio.to_thread(
                 load_image_input, item, lambda encoded: _decode_image_data(encoded, name),
-                file_root=file_root,
             )
             if "file_path" in item:
                 validate_image_data(raw)
@@ -1145,9 +1211,9 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
 
     elif tool_name == "import_profile":
         _check_expected_snapshot(args, session, ("meta_revision",))
-        profile = load_profile_input(
-            args, file_root=_require_live_file_root() if "file_path" in args else None,
-        )
+        if "file_path" in args:
+            _require_local_file_access("передайте профиль объектом profile")
+        profile = load_profile_input(args)
         merged = profile_metadata(profile, session.meta)
         await session_manager.update_meta(
             token=session.token,

@@ -117,6 +117,11 @@ def create_application(port: int = DEFAULT_PORT) -> LocalOnlyApp:
     """Validate the distribution before importing the HTTP application."""
     port = validate_port(port)
     ensure_frontend_dist()
+    # The portable loopback distribution runs on the user's own machine, so its
+    # live MCP may read server-local file sources; every networked deployment
+    # stays base64-only and never advertises file_path.
+    from .engine.local_files import enable_local_files
+    enable_local_files()
     from .main import app
 
     return LocalOnlyApp(app, port)

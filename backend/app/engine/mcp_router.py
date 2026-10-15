@@ -388,7 +388,7 @@ MCP_LIVE_TOOLS = [
             "properties": {
                 "markdown_content": {
                     "type": "string",
-                    "description": "Опционально: проверить конкретный текст вместо текущего отчета"
+                    "description": "Опционально: проверить конкретный текст вместо текущего отчета; не заменяет проверку текущего отчета и не открывает экспорт"
                 },
                 "expected_task_count": {"type": "integer", "minimum": 0, "description": "Число заданий из методички для сверки с текстом"},
                 "expected_figures_count": {"type": "integer", "minimum": 0, "description": "Ожидаемое количество рисунков для сверки"}

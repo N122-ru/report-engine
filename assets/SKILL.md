@@ -16,9 +16,11 @@ headless-процессе. Спрашивай пользователя, не в�
 ## Порядок работы
 
 1. Прочитай задание, `get_capabilities` (транспорт, PDF, лимиты, file_path,
-   справочники) и все страницы `tools/list`. В headless создай новый отчёт через `create_report`.
+   справочники, `tools_diff`) и все страницы `tools/list`. В headless создай новый отчёт через `create_report`.
    Получи `get_report_state`, сохрани Markdown, реквизиты и три ревизии.
    `detail="digest"` — краткие заголовки/ссылки без тела. Не дублируй чтения.
+   Live-ссылка действительна, пока открыта вкладка браузера: если отчёт пуст
+   или инструменты не отвечают, попроси свежий URL в окне «ИИ-агент (MCP)».
 2. Если передан профиль, используй `import_profile`: ровно один JSON-объект
    `profile` или серверный `file_path` (только автономный запуск),
    `format: "report-engine-profile"`, `version: 1`. Для существующего отчёта
@@ -32,8 +34,9 @@ headless-процессе. Спрашивай пользователя, не в�
    `meta_revision`. Номер — из задания или текущего состояния; при сомнении спроси.
    Запиши крупные разделы последовательно через
    `append_or_update_section`, без заголовка в `section_content`. Используй
-   возвращённую `revision` для следующей записи. Точечные редакторы и outline
-   применяй только если они доступны; ID действуют лишь для текущей revision.
+   возвращённую `revision` для следующей записи. Точечные редакторы
+   (`patch_text`, `apply_patches`, `replace_block`, `move_figure`, `delete_block`)
+   и outline применяй только если они доступны; ID действуют лишь для текущей revision.
 5. Перед формулами читай `report://reference/formulas`, таблицами —
    `report://reference/tables`, точными командами/литералами —
    `report://reference/literals`. Для структуры, источников и стиля —
@@ -41,7 +44,9 @@ headless-процессе. Спрашивай пользователя, не в�
 6. После всех изменений вызови `lint_report`. `invalid` означает ошибки,
    `needs_review` — замечания, `ready` — отсутствие замечаний; `is_valid` не
    заменяет `export_blockers`. Исправляй лишь подтверждённые проблемы,
-   после исправлений снова вызывай lint. `review_snapshot` отдаёт отчёт,
+   после исправлений снова вызывай lint. `markdown_content` проверяет
+   альтернативный текст и не открывает экспорт: гейт двигает только lint
+   текущего содержимого отчёта. `review_snapshot` отдаёт отчёт,
    манифест без base64 и lint для отдельного ревьюера, но не заменяет lint-гейт.
 7. Экспортируй только по задаче пользователя и после последнего lint.
    `verify_state.lint_after_last_change` должен быть true. Любая правка текста,
@@ -68,14 +73,18 @@ headless-процессе. Спрашивай пользователя, не в�
   `file_path` в `get_capabilities`; в сетевой сборке передавай `base64_data`.
   Путь локален машине сервера, `~` раскрывается, относительный — от cwd.
   Лимиты: 15 МБ, 150 изображений, Markdown 500 КБ. Готовые вложения повторно не загружай.
-- Live `upload_images` атомарен, требует `expected_revision`; headless требует
-  `expected_image_revision`, а при `insert_into_report=true` ещё `expected_revision`.
+- Live `upload_images` атомарен: принимает свежую `expected_revision` или
+  `expected_snapshot_id`. Headless принимает `expected_image_revision`
+  (и `expected_revision` при `insert_into_report=true`) либо `expected_snapshot_id`.
   Headless сохраняет валидные элементы: проверь `uploaded_count` и `results`,
   не повторяй весь пакет после частичного успеха. Существующее имя не заменяется.
-- Batch arguments may reference earlier successful results with exact strings such
-  as `$0.revision`, `$1.snapshot_id`, or `$2.results.uploaded_count` (at most two
-  path levels). References are resolved before dispatch; missing paths are errors.
-- Outside `batch`, `$...` remains an ordinary string and is never interpolated.
+  Размещение рисунка меняй через `update_image_layout`, дубли без ссылок удаляй
+  через `delete_images`; оба доступны только в live (см. `tools_diff`).
+- В `batch` аргументы могут ссылаться на результаты предыдущих успешных вызовов
+  точными строками вида `$0.revision`, `$1.snapshot_id` или `$2.results.uploaded_count`
+  (не глубже двух уровней пути). Ссылки раскрываются до выполнения; отсутствующий
+  путь — ошибка.
+- Вне `batch` строка `$...` остаётся обычной и не интерполируется.
 
 ## Стиль-минимум и сомнительные данные
 

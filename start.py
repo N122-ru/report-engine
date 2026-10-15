@@ -83,7 +83,7 @@ def check_prerequisites():
                 npm_path = shutil.which("npm")
 
     if not node_path or not npm_path:
-        print(f"{RED}❌ Node.js или npm не найдены! Установите Node.js (v18+).{RESET}")
+        print(f"{RED}❌ Node.js или npm не найдены! Установите Node.js (v20.19+ или v22.12+).{RESET}")
         sys.exit(1)
 
     print(f"{GREEN}✓ Node.js & npm доступны.{RESET}")

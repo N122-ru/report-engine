@@ -26,7 +26,7 @@ export const McpModal: React.FC<McpModalProps> = ({
   const sseUrl = `${origin}/api/mcp/sse?token=${token}`;
 
   // One-time agent setup explicitly selects the SSE transport.
-  const agentSetupCommand = `Добавь MCP-сервер "report-live" с transport: "sse" и URL: ${sseUrl} в свои инструменты и подключись к нему. Если работа с этим сервером не разовая — вызови промпт agent_onboarding, самостоятельно пройди его чеклист изучения окружения и заведи локальную памятку в своей системе скиллов (сервер её не хранит). Веди раздел «Клиентские оптимизации»: дополняй его опытом после каждой сессии, не трогая серверный manifest-блок. Анкета не нужна; только если характер работы неочевиден, задай максимум один короткий вопрос: «работа с этим сервером разовая или постоянная?» Для one-shot памятку не создавай; если постоянная работа или неизвестно — продолжай без вопросов. Прочитай канонические правила из ресурса report://rules/gost732 и веди отчёт по ним. Помни: токен сессии протухает, при обрыве попроси свежий URL из окна «ИИ-агент (MCP)».`;
+  const agentSetupCommand = `Добавь MCP-сервер "report-live" с transport: "sse" и URL: ${sseUrl} в свои инструменты и подключись к нему. Если работа с этим сервером не разовая — вызови промпт agent_onboarding, самостоятельно пройди его чеклист изучения окружения и заведи локальную памятку в своей системе скиллов (сервер её не хранит). Веди раздел «Клиентские оптимизации»: дополняй его опытом после каждой сессии, не трогая серверный manifest-блок. Анкета не нужна; только если характер работы неочевиден, задай максимум один короткий вопрос: «работа с этим сервером разовая или постоянная?» Для one-shot памятку не создавай; если постоянная работа или неизвестно — продолжай без вопросов. Прочитай канонические правила из ресурса report://rules/gost732 и веди отчёт по ним: проверь get_capabilities и прочитай все страницы tools/list (следуй nextCursor). Ссылка привязана к открытой вкладке «ИИ-агент (MCP)»: если инструменты не отвечают или отчёт оказался пустым, попроси свежий URL в этом окне.`;
 
   const antigravityConfig = JSON.stringify({
     mcpServers: {
@@ -44,9 +44,11 @@ export const McpModal: React.FC<McpModalProps> = ({
     }
   }, null, 2);
 
+  // Claude Code reads an entry without "type" as a stdio server and skips it.
   const claudeConfig = JSON.stringify({
     mcpServers: {
       "report-live": {
+        type: "sse",
         url: sseUrl
       }
     }
@@ -108,9 +110,12 @@ export const McpModal: React.FC<McpModalProps> = ({
                 <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
               </div>
               <div className="min-w-0">
-                <span className="font-bold text-emerald-900 text-xs block sm:inline">Сессия активна</span>
+                <span className="font-bold text-emerald-900 text-xs block sm:inline">Токен готов</span>
                 <span className="text-[11px] text-emerald-700 sm:ml-2 font-mono break-all">
                   {token.slice(0, 16)}...
+                </span>
+                <span className="text-[10px] text-emerald-700 block">
+                  Подключение возможно, пока открыта эта вкладка
                 </span>
               </div>
             </div>
@@ -198,6 +203,10 @@ export const McpModal: React.FC<McpModalProps> = ({
                     <span>{copiedKey === 'agent_cmd' ? 'Скопировано' : 'Скопировать'}</span>
                   </button>
                 </div>
+                <p className="text-[10px] text-purple-800">
+                  Ссылка содержит токен этой вкладки. После «Новый токен» скопируйте инструкцию
+                  заново и не публикуйте её.
+                </p>
               </div>
             )}
 

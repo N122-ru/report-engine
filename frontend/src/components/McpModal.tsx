@@ -26,7 +26,7 @@ export const McpModal: React.FC<McpModalProps> = ({
   const sseUrl = `${origin}/api/mcp/sse?token=${token}`;
 
   // One-time agent setup explicitly selects the SSE transport.
-  const agentSetupCommand = `Добавь MCP-сервер "report-live" с transport: "sse" и URL: ${sseUrl} в свои инструменты и подключись к нему. Прочитай канонические правила из ресурса report://rules/gost732 и веди отчёт по ним. Помни: токен сессии протухает, при обрыве попроси свежий URL из окна «ИИ-агент (MCP)».`;
+  const agentSetupCommand = `Добавь MCP-сервер "report-live" с transport: "sse" и URL: ${sseUrl} в свои инструменты и подключись к нему. Если работа с этим сервером будет не одноразовой — вызови промпт agent_onboarding: задай мне его вопросы, пройди его чеклист изучения окружения и сохрани локальную памятку в своей системе скиллов (сервер её не хранит). Прочитай канонические правила из ресурса report://rules/gost732 и веди отчёт по ним. Помни: токен сессии протухает, при обрыве попроси свежий URL из окна «ИИ-агент (MCP)».`;
 
   const antigravityConfig = JSON.stringify({
     mcpServers: {

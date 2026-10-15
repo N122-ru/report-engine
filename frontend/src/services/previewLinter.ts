@@ -179,7 +179,7 @@ export function useLinterStatus(
     const textForRefs = textWithoutImages
       .split('\n')
       .filter(line => !line.trim().match(/^(?:рисунок|рис\.?)\s+\d+(?:\.\d+)*(?:\s*[:–—-]|\s*$)/i)
-        && !line.trim().match(/^(?:таблица|табл\.?)\s*\d+\s*[:–—.\-]/i)
+        && !line.trim().match(/^(?:таблица|табл\.?)\s*\d+\s*[:–—.-]/i)
         && !(line.trim().length < 80 && line.trim().match(/^(?:таблица|табл\.?)\s+\d+\b/i)))
       .join('\n')
       .toLowerCase();
@@ -269,7 +269,7 @@ export function useLinterStatus(
     const sourcesSectionFound = /(?:список|перечень)\s+(?:использованных\s+|основных\s+)?(источников|литературы)/i.test(plainText)
       || (meta.references || []).length > 0;
     if (sourcesSectionFound) {
-      const bibRefs = plainText.match(/\[\s*\d+(?:[\s,\–\-]\s*\d+)*(?:\s*,\s*с\.\s*\d+)?\s*\]/g);
+      const bibRefs = plainText.match(/\[\s*\d+(?:[\s,–-]\s*\d+)*(?:\s*,\s*с\.\s*\d+)?\s*\]/g);
       if (!bibRefs || bibRefs.length === 0) {
         warnings.push('В отчете присутствует раздел «Список источников», однако в тексте отсутствуют ссылки в квадратных скобках (например, [1]).');
       }

@@ -7,6 +7,7 @@ Own the FastAPI application that validates reports, generates DOCX/PDF files, se
 ## Ownership
 
 - `app/` contains the backend application, domain models, document engine, session manager, and HTTP/MCP routes.
+- `app/engine/mcp_manifest.py` owns detached live-tool schemas, discovery ordering, pagination, and local-file manifest policy; `mcp_router.py` owns transport orchestration and tool execution.
 - `assets/` contains backend runtime assets used while serving or generating documents.
 - `headless.py` and `standalone_web.py` define the standalone MCP and loopback web entry points.
 - The repository root owns cross-cutting product rules and the top-level DOX index.

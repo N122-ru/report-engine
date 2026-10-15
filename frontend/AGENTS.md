@@ -15,6 +15,7 @@ Own the React and TypeScript single-page application, its browser-side services,
 - Keep user-facing UI copy, validation messages, and report-facing text in Russian.
 - Keep TypeScript, CSS class names, tests, comments, and developer documentation in English.
 - Preserve parity between browser-side mirrors and their backend counterparts where the root guidance requires it.
+- `src/services/previewLinter.ts` owns the deferred preview compliance summary; `DocumentPreview.tsx` consumes it alongside rendering and pagination services.
 - Custom logos are limited to 2 MiB and accepted only when their bytes match PNG or JPEG signatures; client checks are UX validation and the backend remains authoritative.
 - `src/services/imageRefs.ts` owns browser-side Markdown image-name decoding and matching. Keep it behaviorally aligned with `backend/app/engine/image_refs.py`; ambiguous normalized names must remain unresolved.
 - The report editor remains immediate while the heavy A4 preview consumes deferred content; localStorage autosave is debounced by 300 ms and flushed on `pagehide`.

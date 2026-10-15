@@ -33,6 +33,7 @@ from .typography import (
     clean_listing_caption
 )
 from .math_utils import latex_to_omml, fallback_latex_to_unicode
+from .image_refs import resolve_image_name
 
 def _extract_equation_and_number(raw_text: str) -> Tuple[str, Optional[str]]:
     r"""Extract a LaTeX equation body and its optional number.
@@ -1058,35 +1059,8 @@ def _find_image_bytes(src: str, images_dict: Dict[str, bytes]) -> Optional[bytes
     """Find image bytes in the supplied dictionary using normalized names."""
     if not images_dict:
         return None
-    from urllib.parse import unquote
-
-    candidates = [
-        src,
-        unquote(src),
-        os.path.basename(src),
-        unquote(os.path.basename(src)),
-        src.strip(),
-        os.path.basename(src).strip()
-    ]
-    for c in candidates:
-        if c in images_dict:
-            return images_dict[c]
-
-    lower_dict = {k.lower().strip(): v for k, v in images_dict.items()}
-    for c in candidates:
-        if c.lower().strip() in lower_dict:
-            return lower_dict[c.lower().strip()]
-
-    def normalize_key(s: str) -> str:
-        return re.sub(r'[\s_\-\(\)\.]', '', s).lower()
-
-    norm_dict = {normalize_key(k): v for k, v in images_dict.items()}
-    for c in candidates:
-        nk = normalize_key(c)
-        if nk in norm_dict:
-            return norm_dict[nk]
-
-    return None
+    name = resolve_image_name(src, images_dict.keys())
+    return images_dict.get(name) if name is not None else None
 
 
 def find_missing_images(markdown_text: str, images_dict: Dict[str, bytes]) -> list:

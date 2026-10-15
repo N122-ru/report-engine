@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { ImageLayout } from '../types';
 import { mergeImageFiles, sortMediaFiles, MediaSort } from '../services/media';
+import { imageNamesMatch } from '../services/imageRefs';
 import { 
   X, UploadCloud, Trash2, Plus, Image as ImageIcon, 
   CheckCircle2, AlertCircle
@@ -109,11 +110,8 @@ export const MediaDrawer: React.FC<MediaDrawerProps> = ({
 
   const isImageInserted = (name: string) => {
     const outsideCode = markdownContent.split(/(```[\s\S]*?```)/g).filter((_, i) => i % 2 === 0).join('\n');
-    const canonical = (value: string) => value.toLowerCase().replace(/[\s_()-]+/g, '');
     return [...outsideCode.matchAll(/!\[[^\]]*\]\((?:<([^>]+)>|([^\)]+))\)/g)].some(match => {
-      let src = match[1] || match[2];
-      try { src = decodeURIComponent(src); } catch {}
-      return canonical(src.split(/[/\\]/).pop() || src) === canonical(name);
+      return imageNamesMatch(match[1] || match[2], name);
     });
   };
 
@@ -218,8 +216,7 @@ export const MediaDrawer: React.FC<MediaDrawerProps> = ({
           sortedImages.map(img => {
             const inserted = isImageInserted(img.name);
             const currentAlt = altInputs[img.name] ?? '';
-            const canonical = (name: string) => name.toLowerCase().replace(/[\s_()-]+/g, '');
-            const matching = Object.keys(imageLayouts).filter(name => canonical(name) === canonical(img.name));
+            const matching = Object.keys(imageLayouts).filter(name => imageNamesMatch(name, img.name));
             const layoutKey = img.name in imageLayouts ? img.name : (matching.length === 1 ? matching[0] : img.name);
             const layout = imageLayouts[layoutKey] || {};
             const updateLayout = (patch: ImageLayout) => onImageLayoutChange(layoutKey, { ...layout, ...patch });

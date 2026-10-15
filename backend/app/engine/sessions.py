@@ -23,6 +23,7 @@ from .markdown_parser import _image_size
 from .image_input import MAX_IMAGE_SIZE, MAX_IMAGES_COUNT
 from .report_safety import OperationCache, ReportVerification, with_snapshot
 from .security import validate_markdown_size
+from .image_refs import canonical_image_name
 
 MAX_INACTIVE_HOURS = 48
 
@@ -169,11 +170,8 @@ class SessionData:
             for child in (token.children or [])
             if child.type == "image"
         }
-        def canonical(value: str) -> str:
-            return re.sub(r"[\W_]+", "", os.path.basename(value).casefold())
-
-        normalized_names = Counter(canonical(name) for name in self.images)
-        used_names = {canonical(src) for src in used_images}
+        normalized_names = Counter(canonical_image_name(name) for name in self.images)
+        used_names = {canonical_image_name(src) for src in used_images}
         for name, data in self.images.items():
             mime, _ = mimetypes.guess_type(name)
             mime = mime or "image/png"
@@ -187,7 +185,8 @@ class SessionData:
                 "height_px": dimensions[1] if dimensions else None,
                 "mime_type": mime,
                 "is_in_report": name in used_images or (
-                    normalized_names[canonical(name)] == 1 and canonical(name) in used_names
+                    normalized_names[canonical_image_name(name)] == 1
+                    and canonical_image_name(name) in used_names
                 ),
                 "url": f"/api/session/{self.token}/images/{name}"
             })

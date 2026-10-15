@@ -27,6 +27,7 @@ Own regression tests for the backend API, report generation, normocontrol, MCP s
 - Packaging regressions must reject missing or corrupted frozen runtime data, including DOCX templates and every web asset; unit fixtures must not require a prior frontend build.
 - MCP regressions cover batch preflight/continuation/stop behavior, live write-lock serialization with concurrent reads, file-source exclusivity, size limits and the local-run-only `file_path` policy (schemas, errors, capabilities), and the distinct atomic live versus partial-success headless image-upload contracts.
 - MCP contract regressions also cover atomic snapshots, structured conflicts, per-transport idempotency, batch result references, manifest symmetry, and onboarding/resource-version parity across both transports.
+- `image_ref_cases.json` is a shared backend/frontend fixture for normalized Markdown image-reference resolution; both implementations must pass its vectors.
 - Launcher coverage checks Windows scripts statically and Linux scripts at runtime, including clean MCP stdout, failure exit codes, selected browser URLs, and readiness gating. Package guides must cover both MCP transports and novice recovery.
 
 ## Verification

@@ -1,0 +1,32 @@
+[
+  {
+    "reference": "Схема сети.png",
+    "names": ["Схема_сети.png"],
+    "match": "Схема_сети.png",
+    "canonical": "схемасетиpng"
+  },
+  {
+    "reference": "folder\\Схема%20сети.png",
+    "names": ["Схема_сети.png"],
+    "match": "Схема_сети.png",
+    "canonical": "схемасетиpng"
+  },
+  {
+    "reference": "FIGURE-01.final.png",
+    "names": ["figure_01_final.png"],
+    "match": "figure_01_final.png",
+    "canonical": "figure01finalpng"
+  },
+  {
+    "reference": "Straße.png",
+    "names": ["straße.png"],
+    "match": "straße.png",
+    "canonical": "straßepng"
+  },
+  {
+    "reference": "a-b.png",
+    "names": ["a_b.png", "ab.png"],
+    "match": null,
+    "canonical": "abpng"
+  }
+]

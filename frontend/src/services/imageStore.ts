@@ -1,3 +1,7 @@
+import { canonicalImageName } from './imageRefs.ts';
+
+export { canonicalImageName } from './imageRefs.ts';
+
 const DATABASE_NAME = 'report-local-images';
 const STORE_NAME = 'originals';
 
@@ -16,9 +20,6 @@ export interface StoredImage {
   size: number;
   sha256: string;
 }
-
-export const canonicalImageName = (filename: string): string =>
-  filename.toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
 
 let databasePromise: Promise<IDBDatabase> | null = null;
 

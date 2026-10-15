@@ -4,6 +4,7 @@ import { ReportMetadata } from '../types';
 import { normalizeLogoMode } from '../services/profiles';
 import { formatReference } from '../services/bibliography';
 import { extractMarkdownImageSources, parseReportInline, type InlinePart } from '../services/markdown';
+import { isExternalImageRef, resolveImageName } from '../services/imageRefs';
 import { createPreviewParagraph, estimateTableHeight, paginatePreviewBlocks, splitPreviewTableRow, type ParsedBlock } from '../services/previewPagination';
 import { 
   CheckCircle, XCircle, ShieldCheck, Eye, Wand2,
@@ -234,44 +235,9 @@ function resolveImagePreviewUrl(
   imageMap: Record<string, string>,
   images: File[]
 ): string | undefined {
-  if (!filename) return undefined;
-
-  // Prefer an exact match.
-  if (imageMap[filename]) return imageMap[filename];
-
-  // Try URL-decoded names.
-  try {
-    const decoded = decodeURIComponent(filename);
-    if (imageMap[decoded]) return imageMap[decoded];
-    if (imageMap[decoded.toLowerCase()]) return imageMap[decoded.toLowerCase()];
-  } catch {}
-
-  // Try the basename without path components.
-  const basename = filename.split(/[/\\]/).pop() || filename;
-  if (imageMap[basename]) return imageMap[basename];
-  if (imageMap[basename.toLowerCase()]) return imageMap[basename.toLowerCase()];
-
-  // Try normalized names.
-  const normalize = (s: string) => s.toLowerCase().replace(/[\s_()-]+/g, '');
-  const normTarget = normalize(basename);
-
-  for (const img of images) {
-    if (normalize(img.name) === normTarget) {
-      return imageMap[img.name];
-    }
-  }
-
-  // Fall back to names without extensions.
-  const withoutExt = basename.replace(/\.[^/.]+$/, '');
-  const normWithoutExt = normalize(withoutExt);
-  for (const img of images) {
-    const imgWithoutExt = img.name.replace(/\.[^/.]+$/, '');
-    if (normalize(imgWithoutExt) === normWithoutExt) {
-      return imageMap[img.name];
-    }
-  }
-
-  return undefined;
+  if (!filename || isExternalImageRef(filename)) return undefined;
+  const resolved = resolveImageName(filename, images.map(image => image.name));
+  return resolved ? imageMap[resolved] || imageMap[resolved.toLowerCase()] : undefined;
 }
 
 // Listing captions mirror backend clean_listing_caption (typography.py).
@@ -632,32 +598,14 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
     }
 
     // Warn about missing image attachments before they become export placeholders.
-    const knownNames = new Set<string>();
-    const normImgName = (s: string) => s.toLowerCase().replace(/[\s_()-]+/g, '');
-    images.forEach(f => {
-      knownNames.add(f.name);
-      knownNames.add(f.name.toLowerCase());
-      const base = f.name.split(/[/\\]/).pop() || f.name;
-      knownNames.add(base);
-      knownNames.add(base.toLowerCase());
-      knownNames.add(normImgName(f.name));
-      knownNames.add(normImgName(base));
-    });
+    const knownNames = images.map(file => file.name);
     const resolveKnown = (src: string): boolean => {
       const raw = (src || '').trim().replace(/^<|>$/g, '');
       if (!raw) return true;
-      const low = raw.toLowerCase();
-      if (low.startsWith('http://') || low.startsWith('https://') || low.startsWith('data:') || low.startsWith('blob:')) {
+      if (isExternalImageRef(raw)) {
         return true;
       }
-      let decoded = raw;
-      try {
-        decoded = decodeURIComponent(raw);
-      } catch {}
-      const base = raw.split(/[/\\]/).pop() || raw;
-      const baseDecoded = decoded.split(/[/\\]/).pop() || decoded;
-      const candidates = [raw, decoded, base, baseDecoded, raw.toLowerCase(), decoded.toLowerCase(), base.toLowerCase(), baseDecoded.toLowerCase(), normImgName(raw), normImgName(base)];
-      return candidates.some(c => knownNames.has(c));
+      return Boolean(resolveImageName(raw, knownNames));
     };
     const missingSrcs: string[] = [];
     const seenImgSrcs = new Set<string>();
@@ -665,7 +613,7 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
       const src = image.src.trim().replace(/^<|>$/g, '');
       if (!src || seenImgSrcs.has(src)) continue;
       seenImgSrcs.add(src);
-      if (/^(?:https?:|data:|blob:)/i.test(src)) {
+      if (isExternalImageRef(src)) {
         warnings.push(`Изображение «${src}» нельзя встроить в DOCX/PDF из внешнего или data/blob-источника.`);
         continue;
       }
@@ -924,18 +872,14 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
           // matching backend clean_figure_caption (typography.py).
           // Use separator lookahead because JS word boundaries exclude Cyrillic.
           const cleanAlt = rawAlt.replace(/^(рисунок|рис)(?=[\s.\d:–—-]|$)\.?\s*\d*(?:\.\d+)*\s*[-–—:.]?\s*/i, '').trim() || rawAlt;
-           const alt = capitalizeCaption(cleanAlt.replace(/\s+[-–—]\s+/g, ' — '));
+          const alt = capitalizeCaption(cleanAlt.replace(/\s+[-–—]\s+/g, ' — '));
           const filename = (srcRaw || '').trim().replace(/^<|>$/g, '');
-          let decoded = filename;
-          try { decoded = decodeURIComponent(filename); } catch {}
-          const basename = decoded.split(/[/\\]/).pop() || decoded;
-          const canonical = (name: string) => name.toLowerCase().replace(/[\s_()-]+/g, '');
-          const matches = Object.entries(meta.image_layouts || {}).filter(([name]) => canonical(name) === canonical(basename));
-          const layout = meta.image_layouts?.[basename] || (matches.length === 1 ? matches[0][1] : undefined);
+          const layoutName = resolveImageName(filename, Object.keys(meta.image_layouts || {}));
+          const layout = layoutName ? meta.image_layouts?.[layoutName] : undefined;
           const widthPx = (layout?.width_percent ?? (155 / 165) * 100) / 100 * (165 / 210 * 595);
           const maxHeightPx = (layout?.max_height_mm ?? 200) / 210 * 595;
-          const dimensionMatches = Object.entries(imageSizes).filter(([name]) => canonical(name) === canonical(basename));
-          const dimensions = imageSizes[basename] || (dimensionMatches.length === 1 ? dimensionMatches[0][1] : undefined);
+          const dimensionsName = resolveImageName(filename, Object.keys(imageSizes));
+          const dimensions = dimensionsName ? imageSizes[dimensionsName] : undefined;
           const renderWidthPx = dimensions?.height
             ? Math.min(widthPx, maxHeightPx * dimensions.width / dimensions.height)
             : widthPx;

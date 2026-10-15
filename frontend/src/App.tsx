@@ -11,6 +11,7 @@ import { ReportGuideModal } from './components/ReportGuideModal';
 import { ReportMetadata } from './types';
 import { EditorSelection } from './services/editorInsertion';
 import { extractMarkdownImageSources } from './services/markdown';
+import { isExternalImageRef, resolveImageName } from './services/imageRefs';
 import { generateDocument, autofixMarkdown, getRuntimeCapabilities, getVersionInfo, type VersionInfo } from './services/api';
 import { 
   initSession, 
@@ -60,35 +61,17 @@ type RemoteConflict = {
 // Ignore fenced code and external http/data/blob URLs.
 const findMissingImageRefs = (text: string, files: File[]): string[] => {
   if (!text) return [];
-  const known = new Set<string>();
-  const norm = (s: string) => s.toLowerCase().replace(/[\s_()-]+/g, '');
-  files.forEach(f => {
-    known.add(f.name);
-    known.add(f.name.toLowerCase());
-    const base = f.name.split(/[/\\]/).pop() || f.name;
-    known.add(base);
-    known.add(base.toLowerCase());
-    known.add(norm(f.name));
-    known.add(norm(base));
-  });
+  const knownNames = files.map(file => file.name);
   const missing: string[] = [];
   const seen = new Set<string>();
   for (const image of extractMarkdownImageSources(text)) {
     const src = image.src.trim().replace(/^<|>$/g, '');
     if (!src || seen.has(src)) continue;
     seen.add(src);
-    const low = src.toLowerCase();
-    if (low.startsWith('http://') || low.startsWith('https://') || low.startsWith('data:') || low.startsWith('blob:')) {
+    if (isExternalImageRef(src)) {
       continue;
     }
-    let decoded = src;
-    try {
-      decoded = decodeURIComponent(src);
-    } catch {}
-    const base = src.split(/[/\\]/).pop() || src;
-    const baseDecoded = decoded.split(/[/\\]/).pop() || decoded;
-    const candidates = [src, decoded, base, baseDecoded, src.toLowerCase(), decoded.toLowerCase(), base.toLowerCase(), baseDecoded.toLowerCase(), norm(src), norm(base)];
-    if (!candidates.some(c => known.has(c))) {
+    if (!resolveImageName(src, knownNames)) {
       missing.push(src);
     }
   }
@@ -98,7 +81,7 @@ const findMissingImageRefs = (text: string, files: File[]): string[] => {
 const findUnsupportedImageRefs = (text: string): string[] => [...new Set(
   extractMarkdownImageSources(text)
     .map(image => image.src.trim().replace(/^<|>$/g, ''))
-    .filter(src => /^(?:https?:|data:|blob:)/i.test(src)),
+    .filter(isExternalImageRef),
 )];
 
 // Confirm download with missing images; return true to proceed.

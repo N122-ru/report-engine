@@ -30,14 +30,14 @@ from .typography import apply_typography_outside_code, strip_trailing_dot
 from .section_editor import edit_section, sections, section_identifier
 from .block_editor import blocks, edit_block, move_figure
 from .profile import load_profile_input, profile_metadata
-from .image_input import IMAGE_SOURCE_SCHEMA, load_image_input
+from .image_input import IMAGE_SOURCE_SCHEMA, load_image_input, validate_image_data
 from .mcp_batch import BATCH_SCHEMA, resolve_batch_arguments, validate_batch_calls
 from .report_safety import (
     REVISION_FIELDS, add_content_guards, conflict_payload, is_conflict_message,
-    report_digest, validate_detail, with_snapshot,
+    report_digest, require_revision_guard, validate_detail, with_snapshot,
 )
 from .agent_resources import (
-    agent_onboarding_prompt, get_capabilities, read_agent_asset, read_reference,
+    agent_onboarding_prompt, get_capabilities, live_file_root, read_agent_asset, read_reference,
     reference_resources,
 )
 from .pdf_converter import convert_docx_to_pdf
@@ -173,7 +173,7 @@ MCP_LIVE_TOOLS = [
         ),
         "inputSchema": {
             "type": "object",
-            "required": ["filename", "expected_revision"],
+            "required": ["filename"],
             **IMAGE_SOURCE_SCHEMA,
             "properties": {
                 "expected_revision": {"type": "string", "description": "Текущая revision из get_report_state"},
@@ -205,7 +205,7 @@ MCP_LIVE_TOOLS = [
         "name": "upload_images",
         "description": "Атомарно загружает несколько рисунков из base64_data или file_path на машине сервера и при необходимости вставляет их после блоков из текущего outline.",
         "inputSchema": {
-            "type": "object", "required": ["images", "expected_revision"],
+            "type": "object", "required": ["images"],
             "properties": {
                 "expected_revision": {"type": "string"},
                 "images": {
@@ -227,7 +227,7 @@ MCP_LIVE_TOOLS = [
         "name": "update_image_layout",
         "description": "Настраивает размер и размещение одного прикреплённого рисунка без правки Markdown.",
         "inputSchema": {
-            "type": "object", "required": ["filename", "expected_meta_revision"],
+            "type": "object", "required": ["filename"],
             "properties": {
                 "filename": {"type": "string"},
                 "expected_meta_revision": {"type": "string", "description": "Текущая meta_revision из get_report_state"},
@@ -266,7 +266,7 @@ MCP_LIVE_TOOLS = [
         ),
         "inputSchema": {
             "type": "object",
-            "required": ["section_heading", "section_content", "expected_revision"],
+            "required": ["section_heading", "section_content"],
             "properties": {
                 "section_heading": {
                     "type": "string",
@@ -301,7 +301,7 @@ MCP_LIVE_TOOLS = [
         ),
         "inputSchema": {
             "type": "object",
-            "required": ["find", "replace", "expected_revision"],
+            "required": ["find", "replace"],
             "properties": {
                 "find": {"type": "string", "description": "Точный фрагмент, который нужно найти ровно один раз"},
                 "replace": {"type": "string", "description": "Новый текст"},
@@ -313,7 +313,7 @@ MCP_LIVE_TOOLS = [
         "name": "apply_patches",
         "description": "Атомарно применяет несколько непересекающихся уникальных текстовых замен; при любой ошибке отчёт не меняется.",
         "inputSchema": {
-            "type": "object", "required": ["expected_revision", "patches"],
+            "type": "object", "required": ["patches"],
             "properties": {
                 "expected_revision": {"type": "string"},
                 "patches": {"type": "array", "minItems": 1, "maxItems": 100,
@@ -331,7 +331,7 @@ MCP_LIVE_TOOLS = [
         "name": "replace_block",
         "description": "Заменяет ровно один Markdown-блок по ID из get_document_outline; сохраняет соседние блоки.",
         "inputSchema": {
-            "type": "object", "required": ["block_id", "content", "expected_revision"],
+            "type": "object", "required": ["block_id", "content"],
             "properties": {
                 "block_id": {"type": "string"}, "content": {"type": "string"},
                 "expected_revision": {"type": "string"}
@@ -342,7 +342,7 @@ MCP_LIVE_TOOLS = [
         "name": "delete_block",
         "description": "Удаляет один абзац, рисунок, элемент списка или блок кода по ID текущей revision.",
         "inputSchema": {
-            "type": "object", "required": ["block_id", "expected_revision"],
+            "type": "object", "required": ["block_id"],
             "properties": {"block_id": {"type": "string"}, "expected_revision": {"type": "string"}}
         }
     },
@@ -350,7 +350,7 @@ MCP_LIVE_TOOLS = [
         "name": "move_figure",
         "description": "Перемещает рисунок перед указанным блоком, сохраняя заголовки и требуя актуальную revision.",
         "inputSchema": {
-            "type": "object", "required": ["block_id", "before_block_id", "expected_revision"],
+            "type": "object", "required": ["block_id", "before_block_id"],
             "properties": {
                 "block_id": {"type": "string"}, "before_block_id": {"type": "string"},
                 "expected_revision": {"type": "string"}
@@ -371,7 +371,7 @@ MCP_LIVE_TOOLS = [
         "name": "rollback_last_edit",
         "description": "Откатывает только последнюю правку текста агента при совпадении текущей версии. Правки студента не откатывает.",
         "inputSchema": {
-            "type": "object", "required": ["expected_revision"],
+            "type": "object", "required": [],
             "properties": {"expected_revision": {"type": "string", "description": "Актуальная revision из get_report_state"}}
         }
     },
@@ -401,7 +401,7 @@ MCP_LIVE_TOOLS = [
         ),
         "inputSchema": {
             "type": "object",
-            "required": ["expected_revision"],
+            "required": [],
             "properties": {"expected_revision": {"type": "string"}}
         }
     },
@@ -415,7 +415,7 @@ MCP_LIVE_TOOLS = [
         ),
         "inputSchema": {
             "type": "object",
-            "required": ["expected_meta_revision"],
+            "required": [],
             "properties": {
                 "work_theme": {"type": "string", "description": "Тема работы"},
                 "work_number": {"type": "integer", "description": "Номер работы"},
@@ -455,7 +455,7 @@ MCP_LIVE_TOOLS = [
         ),
         "inputSchema": {
             "type": "object",
-            "required": ["expected_meta_revision"],
+            "required": [],
             "properties": {
                 "profile": {"type": "object", "description": "Объект профиля report-engine-profile версии 1"},
                 "file_path": {"type": "string", "description": "Путь к JSON-файлу относительно текущего каталога"},
@@ -471,7 +471,7 @@ MCP_LIVE_TOOLS = [
         ),
         "inputSchema": {
             "type": "object",
-            "required": ["filename", "expected_revision", "expected_image_revision"],
+            "required": ["filename"],
             "properties": {
                 "expected_revision": {"type": "string"},
                 "expected_image_revision": {"type": "string"},
@@ -491,7 +491,7 @@ MCP_LIVE_TOOLS = [
         ),
         "inputSchema": {
             "type": "object",
-            "required": ["filenames", "expected_revision", "expected_image_revision"],
+            "required": ["filenames"],
             "properties": {
                 "filenames": {
                     "type": "array",
@@ -518,7 +518,7 @@ MCP_LIVE_TOOLS = [
         "name": "export_report",
         "description": "Возвращает DOCX/PDF как base64 без записи на диск. Требует lint после последней правки; заглушки требуют явного подтверждения.",
         "inputSchema": {
-            "type": "object", "required": ["expected_revision", "expected_meta_revision", "expected_image_revision"],
+            "type": "object", "required": [],
             "properties": {
                 "filename": {"type": "string", "default": "report.docx"},
                 "format": {"type": "string", "enum": ["docx", "pdf"], "default": "docx"},
@@ -567,6 +567,7 @@ MCP_MUTATING_TOOLS = frozenset({
     "delete_images",
     "export_report",
 })
+MCP_OPERATION_TOOLS = MCP_MUTATING_TOOLS | {"get_images"}
 
 
 def _add_unified_mutation_fields() -> None:
@@ -578,11 +579,12 @@ def _add_unified_mutation_fields() -> None:
         },
         "operation_id": {
             "type": "string",
+            "maxLength": 128,
             "description": "Необязательный ключ идемпотентности для безопасного повтора операции",
         },
     }
     for tool in MCP_LIVE_TOOLS:
-        if tool["name"] not in MCP_MUTATING_TOOLS and tool["name"] != "batch":
+        if tool["name"] not in MCP_MUTATING_TOOLS and tool["name"] not in {"batch", "get_images"}:
             continue
         properties = tool["inputSchema"].setdefault("properties", {})
         properties.update(fields)
@@ -660,6 +662,42 @@ def _check_expected_snapshot(
         raise ValueError("Конфликт версий: получите актуальное состояние отчёта")
 
 
+LIVE_REVISION_GUARDS = {
+    "upload_image": ("revision",),
+    "upload_images": ("revision",),
+    "update_image_layout": ("meta_revision",),
+    "append_or_update_section": ("revision",),
+    "patch_text": ("revision",),
+    "apply_patches": ("revision",),
+    "replace_block": ("revision",),
+    "delete_block": ("revision",),
+    "move_figure": ("revision",),
+    "rollback_last_edit": ("revision",),
+    "autofix_typography": ("revision",),
+    "update_meta": ("meta_revision",),
+    "import_profile": ("meta_revision",),
+    "delete_image": ("revision", "image_revision"),
+    "delete_images": ("revision", "image_revision"),
+    "export_report": REVISION_FIELDS,
+}
+
+
+def _validate_live_revision_guard(tool_name: str, args: Dict[str, Any]) -> None:
+    """Validate the unified-or-legacy revision contract before dispatching a mutation."""
+    fields = LIVE_REVISION_GUARDS.get(tool_name)
+    if fields is None:
+        return
+    require_revision_guard(args, fields)
+
+
+def _require_live_file_root():
+    """Reject server-file sources unless an absolute allowlisted root is configured."""
+    root = live_file_root()
+    if root is None:
+        raise ValueError("Файловые источники отключены")
+    return root
+
+
 def _decorate_mutation_result(
     tool_name: str, result: Any, session: SessionData,
 ) -> Any:
@@ -681,6 +719,8 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
     """Dispatch tools without locking so a batch can hold one lock across all calls."""
     if tool_name == "batch":
         calls = validate_batch_calls(args)
+        if args.get("expected_snapshot_id") is not None:
+            _check_expected_snapshot(args, session, ())
         results = []
         previous_results = []
         for index, call in enumerate(calls):
@@ -690,16 +730,21 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
                 results.append({"name": call["name"], "ok": True, "result": result})
                 previous_results.append(result)
             except Exception as exc:
-                error = (conflict_payload(str(exc), _session_revisions(session))
-                         if is_conflict_message(str(exc)) else f"Ошибка выполнения {call['name']}: {exc}")
-                results.append({"name": call["name"], "ok": False,
-                                "error": error})
+                detail = (conflict_payload(str(exc), _session_revisions(session))
+                          if is_conflict_message(str(exc)) else None)
+                error = detail["error"] if detail else f"Ошибка выполнения {call['name']}: {exc}"
+                item = {"name": call["name"], "ok": False, "error": error}
+                if detail:
+                    item["error_detail"] = detail
+                results.append(item)
                 previous_results.append(None)
                 if args.get("stop_on_error", False):
                     break
         return results
 
-    elif tool_name == "get_capabilities":
+    _validate_live_revision_guard(tool_name, args)
+
+    if tool_name == "get_capabilities":
         return get_capabilities("live")
 
     elif tool_name == "list_images":
@@ -774,9 +819,13 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         if not filename:
             raise ValueError("Не указан filename")
 
+        file_root = _require_live_file_root() if "file_path" in args else None
         raw_bytes = await asyncio.to_thread(
             load_image_input, args, lambda encoded: _decode_image_data(encoded.strip(), filename),
+            file_root=file_root,
         )
+        if "file_path" in args:
+            validate_image_data(raw_bytes)
         _check_expected_snapshot(args, session, ("revision",))
         safe_name = session.add_image(filename, raw_bytes)
 
@@ -832,7 +881,13 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
             if name in names:
                 raise ValueError(f"Повторяющееся имя изображения: {name}")
             names.add(name)
-            raw = await asyncio.to_thread(load_image_input, item, lambda encoded: _decode_image_data(encoded, name))
+            file_root = _require_live_file_root() if "file_path" in item else None
+            raw = await asyncio.to_thread(
+                load_image_input, item, lambda encoded: _decode_image_data(encoded, name),
+                file_root=file_root,
+            )
+            if "file_path" in item:
+                validate_image_data(raw)
             staged.append((name, raw))
             anchor_id = item.get("after_block_id")
             if anchor_id is not None:
@@ -1090,7 +1145,9 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
 
     elif tool_name == "import_profile":
         _check_expected_snapshot(args, session, ("meta_revision",))
-        profile = load_profile_input(args)
+        profile = load_profile_input(
+            args, file_root=_require_live_file_root() if "file_path" in args else None,
+        )
         merged = profile_metadata(profile, session.meta)
         await session_manager.update_meta(
             token=session.token,
@@ -1315,18 +1372,27 @@ def _tool_is_mutating(tool_name: str, args: Dict[str, Any]) -> bool:
     return any(call["name"] in MCP_MUTATING_TOOLS for call in validate_batch_calls(args))
 
 
+def _tool_supports_operation(tool_name: str, args: Dict[str, Any]) -> bool:
+    """Allow idempotency keys for mutations and bounded heavy image reads."""
+    if tool_name != "batch":
+        return tool_name in MCP_OPERATION_TOOLS
+    return any(call["name"] in MCP_OPERATION_TOOLS for call in validate_batch_calls(args))
+
+
 async def _dispatch_mcp_tool_with_operation(
     tool_name: str, args: Dict[str, Any], session: SessionData,
 ) -> Any:
     """Deduplicate one mutation and add its complete current snapshot."""
     operation_id = args.get("operation_id")
-    if operation_id is not None and _tool_is_mutating(tool_name, args):
+    if tool_name == "batch" and args.get("expected_snapshot_id") is not None:
+        _check_expected_snapshot(args, session, ())
+    if operation_id is not None and _tool_supports_operation(tool_name, args):
         cached = session.operation_cache.lookup(operation_id, args, tool_name)
         if cached is not None:
             return cached
     result = await _dispatch_mcp_tool(tool_name, args, session)
     result = _decorate_mutation_result(tool_name, result, session)
-    if operation_id is not None and _tool_is_mutating(tool_name, args):
+    if operation_id is not None and _tool_supports_operation(tool_name, args):
         session.operation_cache.store(operation_id, args, result, tool_name)
     return result
 

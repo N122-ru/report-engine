@@ -196,7 +196,7 @@ def test_capabilities_advertise_runtime_and_limits(transport):
     assert caps["transport"] == name
     assert caps["contract_version"]
     assert caps["pdf_export"] is False
-    assert caps["file_path"] is True
+    assert caps["file_path"] == ("standalone" if name == "headless" else False)
     assert caps["limits"] == {"image_bytes": 15 * 1024 * 1024, "images_count": 150, "markdown_bytes": 500 * 1024}
     assert set(caps["reference_resources"]) == {f"report://reference/{name}" for name in ("figures", "formulas", "tables", "style", "literals")}
     expected_resources = {
@@ -412,6 +412,93 @@ def test_revision_conflicts_include_machine_readable_next_action(transport):
     assert payload["conflict"] is True
     assert payload["current"]["snapshot_id"] == state["snapshot_id"]
     assert payload["next_action"] == "refresh_and_retry"
+
+
+def test_batch_stale_snapshot_is_rejected_before_any_call(transport):
+    name, call, _, _, report, _, _ = transport
+    _, before = call("get_report_state")
+    error, result = call(
+        "batch", expected_snapshot_id="stale", calls=[
+            {"name": "update_meta", "arguments": {
+                "work_theme": "Не должно примениться",
+                "expected_snapshot_id": before["snapshot_id"],
+            }},
+        ],
+    )
+    assert error
+    payload = json.loads(result)
+    assert payload["conflict"] is True
+    assert payload["current"]["snapshot_id"] == before["snapshot_id"]
+    assert payload["next_action"] == "refresh_and_retry"
+    assert call("get_report_state")[1]["metadata"] == before["metadata"]
+
+
+def test_snapshot_only_mutations_are_advertised_and_dispatched(transport):
+    name, call, _, export, _, client, token = transport
+    if name == "live":
+        schemas = {}
+        cursor = None
+        while True:
+            params = {} if cursor is None else {"cursor": cursor}
+            page = client.post(f"/api/mcp/messages?token={token}", json={
+                "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": params,
+            }).json()["result"]
+            schemas.update({tool["name"]: tool["inputSchema"] for tool in page["tools"]})
+            cursor = page.get("nextCursor")
+            if cursor is None:
+                break
+    else:
+        from backend.app.headless import _tools
+        schemas = {tool.name: tool.input_schema for tool in _tools()}
+    for tool_name in ("append_or_update_section", "update_meta", "export_report"):
+        assert "expected_snapshot_id" not in schemas[tool_name]["required"]
+
+    _, state = call("get_report_state")
+    assert not call("append_or_update_section", section_heading="# Вывод",
+                    section_content="Снимок применяется.",
+                    expected_snapshot_id=state["snapshot_id"])[0]
+    _, state = call("get_report_state")
+    metadata = {"fields": {"work_theme": "Снимок"}} if name == "headless" else {"work_theme": "Снимок"}
+    assert not call("update_meta", expected_snapshot_id=state["snapshot_id"], **metadata)[0]
+    assert not call("lint_report")[0]
+    _, state = call("get_report_state")
+    error, result = export(expected_snapshot_id=state["snapshot_id"])
+    assert not error, result
+
+
+def test_operation_cache_bounds_results_and_operation_ids():
+    from backend.app.engine.report_safety import OperationCache
+
+    cache = OperationCache(limit=10, max_bytes=180)
+    assert cache.store("first", {}, {"value": "a" * 100}) is None
+    assert cache.store("second", {}, {"value": "b" * 100}) is None
+    assert cache.lookup("first", {}) is None
+    assert cache.lookup("second", {}) == {"value": "b" * 100}
+    marker = cache.store("large", {}, {"value": "x" * (256 * 1024)})
+    assert marker == {"cached": False, "reason": "result_too_large"}
+    assert cache.lookup("large", {}) is None
+    with pytest.raises(ValueError, match="128"):
+        cache.store("x" * 129, {}, {"value": "small"})
+
+
+def test_batch_error_is_a_string_with_optional_structured_detail(transport):
+    _, call, _, _, _, _, _ = transport
+    error, result = call("batch", calls=[{"name": "unknown", "arguments": {}}])
+    assert not error
+    assert isinstance(result[0]["error"], str)
+
+
+def test_headless_export_response_contains_all_revisions(tmp_path):
+    report = HeadlessReport(tmp_path)
+    report.create_report()
+    report.lint_report()
+    state = report.get_report_state()
+    result = report.export_report(
+        "revisions.docx", state["revision"], state["meta_revision"], state["image_revision"],
+    )
+    assert {key: result[key] for key in ("revision", "meta_revision", "image_revision", "snapshot_id")} == {
+        key: state[key] for key in ("revision", "meta_revision", "image_revision", "snapshot_id")
+    }
 
 
 def test_operation_id_retries_are_cached_without_reapplying(transport):

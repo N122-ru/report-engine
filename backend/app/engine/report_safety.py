@@ -13,6 +13,9 @@ from .markdown_parser import _find_image_bytes
 from .section_editor import sections
 
 MAX_MARKDOWN_BYTES = 500 * 1024
+OPERATION_CACHE_MAX_BYTES = 8 * 1024 * 1024
+OPERATION_RESULT_MAX_BYTES = 256 * 1024
+MAX_OPERATION_ID_LENGTH = 128
 BLOCKING_KINDS = frozenset({"placeholder", "missing_image"})
 REVISION_FIELDS = ("revision", "meta_revision", "image_revision")
 GUARDS = (
@@ -139,6 +142,27 @@ def is_conflict_message(message: str) -> bool:
     ))
 
 
+def require_revision_guard(
+    arguments: dict[str, Any], fields: tuple[str, ...], *, alternatives: tuple[str, ...] = (),
+) -> None:
+    """Require an atomic snapshot or the legacy revision arguments for a mutation."""
+    if arguments.get("expected_snapshot_id") is not None:
+        return
+    required = alternatives or tuple(
+        field if field.startswith("expected_") else f"expected_{field}" for field in fields
+    )
+    if alternatives:
+        present = any(arguments.get(field) is not None for field in alternatives)
+        missing = [] if present else list(alternatives)
+    else:
+        missing = [field for field in required if arguments.get(field) is None]
+    if missing:
+        names = " или ".join(missing) if alternatives else ", ".join(missing)
+        raise ValueError(
+            f"Передайте expected_snapshot_id или актуальные параметры версий: {names}"
+        )
+
+
 def operation_fingerprint(arguments: dict[str, Any], operation_name: str = "") -> str:
     """Hash operation arguments while excluding the id used for deduplication."""
     payload = {key: value for key, value in arguments.items() if key != "operation_id"}
@@ -153,41 +177,77 @@ def operation_fingerprint(arguments: dict[str, Any], operation_name: str = "") -
 
 
 class OperationCache:
-    """Keep at most the latest 100 successful idempotent operation results."""
+    """Keep bounded successful idempotent operation results using byte-based LRU."""
 
-    def __init__(self, limit: int = 100) -> None:
+    def __init__(self, limit: int = 100, max_bytes: int = OPERATION_CACHE_MAX_BYTES) -> None:
         self.limit = limit
-        self._entries: OrderedDict[str, tuple[str, Any]] = OrderedDict()
+        self.max_bytes = max_bytes
+        self._bytes = 0
+        self._entries: OrderedDict[str, tuple[str, Any, int]] = OrderedDict()
+
+    @staticmethod
+    def _size(value: Any) -> int:
+        """Estimate the UTF-8 payload size used by the cached MCP result."""
+        if hasattr(value, "model_dump"):
+            value = value.model_dump(mode="json", by_alias=True, exclude_none=True)
+        try:
+            return len(json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=repr).encode("utf-8"))
+        except (TypeError, ValueError):
+            return len(repr(value).encode("utf-8"))
+
+    @staticmethod
+    def _validate_id(operation_id: Any) -> str:
+        if not isinstance(operation_id, str) or not operation_id.strip():
+            raise ValueError("Параметр «operation_id» должен быть непустой строкой")
+        if len(operation_id) > MAX_OPERATION_ID_LENGTH:
+            raise ValueError(f"Параметр «operation_id» не может быть длиннее {MAX_OPERATION_ID_LENGTH} символов")
+        return operation_id
 
     def lookup(self, operation_id: Any, arguments: dict[str, Any], operation_name: str = "") -> Any:
         """Return a cached result, or ``None`` when the operation is new."""
         if operation_id is None:
             return None
-        if not isinstance(operation_id, str) or not operation_id.strip():
-            raise ValueError("Параметр «operation_id» должен быть непустой строкой")
+        operation_id = self._validate_id(operation_id)
         fingerprint = operation_fingerprint(arguments, operation_name)
         entry = self._entries.get(operation_id)
         if entry is None:
             return None
-        saved_fingerprint, result = entry
+        saved_fingerprint, result, _ = entry
         if saved_fingerprint != fingerprint:
             raise ValueError("operation_id уже использован с другими аргументами")
         self._entries.move_to_end(operation_id)
         return deepcopy(result)
 
     def store(self, operation_id: Any, arguments: dict[str, Any], result: Any,
-              operation_name: str = "") -> None:
+              operation_name: str = "") -> dict[str, Any] | None:
         """Store one successful operation and evict the least recently used item."""
         if operation_id is None:
             return
-        if not isinstance(operation_id, str) or not operation_id.strip():
-            raise ValueError("Параметр «operation_id» должен быть непустой строкой")
+        operation_id = self._validate_id(operation_id)
+        result_size = self._size(result)
+        if result_size > OPERATION_RESULT_MAX_BYTES:
+            self._remove(operation_id)
+            return {"cached": False, "reason": "result_too_large"}
+        self._remove(operation_id)
         self._entries[operation_id] = (
-            operation_fingerprint(arguments, operation_name), deepcopy(result)
+            operation_fingerprint(arguments, operation_name), deepcopy(result), result_size
         )
+        self._bytes += result_size
         self._entries.move_to_end(operation_id)
-        while len(self._entries) > self.limit:
-            self._entries.popitem(last=False)
+        while len(self._entries) > self.limit or self._bytes > self.max_bytes:
+            _, (_, _, size) = self._entries.popitem(last=False)
+            self._bytes -= size
+
+    def _remove(self, operation_id: str) -> None:
+        """Remove one cache entry and maintain the byte accounting."""
+        entry = self._entries.pop(operation_id, None)
+        if entry is not None:
+            self._bytes -= entry[2]
+
+    def clear(self) -> None:
+        """Discard cached results after a resource deletion."""
+        self._entries.clear()
+        self._bytes = 0
 
 
 class ReportVerification:
@@ -220,7 +280,10 @@ class ReportVerification:
         if type(confirm) is not bool:
             raise ValueError("confirm_blocked_export должен быть логическим значением")
         if not self.state(revisions)["lint_after_last_change"]:
-            raise ValueError("Сначала проверь отчёт через lint_report после последнего изменения")
+            raise ValueError(
+                "Сначала проверь отчёт через lint_report после последнего изменения "
+                "(выполните lint_report после последнего изменения отчёта)"
+            )
         blockers = (self.lint_result or {}).get("export_blockers", [])
         if blockers and confirm is not True:
             import json

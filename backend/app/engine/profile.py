@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from ..models.report import ReportMetadata
+from .image_input import resolve_file_path
 
 
 PROFILE_FORMAT = "report-engine-profile"
@@ -104,7 +105,7 @@ def validate_profile(value: Any) -> dict[str, Any]:
     }
 
 
-def load_profile_input(args: dict[str, Any]) -> dict[str, Any]:
+def load_profile_input(args: dict[str, Any], *, file_root: Path | None = None) -> dict[str, Any]:
     """Read an inline profile or a local JSON file without accepting both."""
     profile = args.get("profile")
     file_path = args.get("file_path")
@@ -114,9 +115,7 @@ def load_profile_input(args: dict[str, Any]) -> dict[str, Any]:
         return validate_profile(profile)
     if not isinstance(file_path, str) or not file_path.strip():
         raise ValueError("Параметр file_path должен быть непустой строкой")
-    path = Path(file_path).expanduser()
-    if not path.is_absolute():
-        path = Path.cwd() / path
+    path = resolve_file_path(file_path, root=file_root)
     try:
         if not path.is_file() or path.stat().st_size > PROFILE_MAX_BYTES:
             raise ValueError("Файл профиля не найден или превышает допустимый размер")

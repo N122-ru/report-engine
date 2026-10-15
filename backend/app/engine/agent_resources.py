@@ -1,6 +1,7 @@
 """Locate the canonical core and allowlisted references in source and frozen runtimes."""
 
 import hashlib
+import os
 import sys
 from pathlib import Path
 
@@ -127,12 +128,32 @@ def get_capabilities(transport: str) -> dict:
         {"name": name, "available_in": "live" if transport == "headless" else "headless"}
         for name in sorted(other - own)
     ]
+    file_path: object = "standalone" if transport == "headless" else False
+    if transport == "live":
+        root = live_file_root()
+        if root is not None:
+            file_path = {"root": str(root)}
     return {
         "transport": transport, "contract_version": CONTRACT_VERSION,
-        **pdf_export_status(), "file_path": True,
+        **pdf_export_status(), "file_path": file_path,
         "limits": {"image_bytes": MAX_IMAGE_SIZE, "images_count": MAX_IMAGES_COUNT,
                    "markdown_bytes": MAX_MARKDOWN_BYTES},
         "reference_resources": [resource["uri"] for resource in reference_resources()],
         "resources": resource_versions(),
         "tools_diff": tools_diff,
     }
+
+
+def live_file_root() -> Path | None:
+    """Return the valid live-MCP file root configured by the environment."""
+    raw = os.environ.get("REPORT_ENGINE_MCP_FILE_ROOT")
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        return None
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError:
+        return None
+    return resolved if resolved.is_dir() else None

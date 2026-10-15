@@ -222,11 +222,11 @@ def test_mcp_mutations_require_revisions_even_in_default_modes():
 
     tools = _list_all_mcp_tools(token)
     schemas = {tool["name"]: tool["inputSchema"] for tool in tools}
-    assert "expected_revision" in schemas["append_or_update_section"]["required"]
-    assert "expected_meta_revision" in schemas["update_meta"]["required"]
+    assert "expected_revision" not in schemas["append_or_update_section"]["required"]
+    assert "expected_meta_revision" not in schemas["update_meta"]["required"]
     assert "get_images" in schemas
     assert "delete_images" in schemas
-    assert "expected_image_revision" in schemas["delete_image"]["required"]
+    assert "expected_image_revision" not in schemas["delete_image"]["required"]
 
 
 def test_agent_cannot_rollback_last_browser_edit():
@@ -734,12 +734,13 @@ async def test_mcp_batch_holds_write_lock_for_entire_sequence_and_allows_reads()
                 await asyncio.gather(task, return_exceptions=True)
 
 
-def test_mcp_upload_image_reads_file_path_and_inserts_markdown(tmp_path):
+def test_mcp_upload_image_reads_file_path_and_inserts_markdown(tmp_path, monkeypatch):
     token = client.get("/api/session/init").json()["token"]
     _, state = _call_report_tool(token, "get_report_state", {})
     sample = b"\x89PNG\r\n\x1a\n" + b"payload"
     path = tmp_path / "screen.png"
     path.write_bytes(sample)
+    monkeypatch.setenv("REPORT_ENGINE_MCP_FILE_ROOT", str(tmp_path))
     result, payload = _call_report_tool(token, "upload_image", {
         "filename": "Снимок экрана.png", "file_path": str(path),
         "expected_revision": state["revision"], "caption": "Снимок", "insert_into_report": True,
@@ -750,16 +751,59 @@ def test_mcp_upload_image_reads_file_path_and_inserts_markdown(tmp_path):
     assert "![Снимок](Снимок_экрана.png)" in client.get(f"/api/session/init?token={token}").json()["content"]
 
 
+def test_live_file_path_is_rooted_and_validates_image_signature(tmp_path, monkeypatch):
+    token = client.get("/api/session/init").json()["token"]
+    _, state = _call_report_tool(token, "get_report_state", {})
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"\x89PNG\r\n\x1a\n")
+    root = tmp_path / "allowed"
+    root.mkdir()
+    inside = root / "inside.png"
+    inside.write_bytes(b"\x89PNG\r\n\x1a\n")
+    symlink = root / "link.png"
+    symlink.symlink_to(outside)
+
+    error, _ = _call_report_tool(token, "upload_image", {
+        "filename": "disabled.png", "file_path": str(inside),
+        "expected_revision": state["revision"],
+    })
+    assert error["isError"] and "Файловые источники отключены" in error["content"][0]["text"]
+
+    monkeypatch.setenv("REPORT_ENGINE_MCP_FILE_ROOT", str(root))
+    error, payload = _call_report_tool(token, "upload_image", {
+        "filename": "inside.png", "file_path": str(inside),
+        "expected_revision": state["revision"],
+    })
+    assert not error["isError"], payload
+    _, state = _call_report_tool(token, "get_report_state", {})
+
+    for path, message in ((root / "../outside.png", "корня"), (symlink, "корня")):
+        error, _ = _call_report_tool(token, "upload_image", {
+            "filename": "rejected.png", "file_path": str(path),
+            "expected_revision": state["revision"],
+        })
+        assert error["isError"] and message in error["content"][0]["text"]
+
+    non_image = root / "notes.txt"
+    non_image.write_text("not an image", encoding="utf-8")
+    error, _ = _call_report_tool(token, "upload_image", {
+        "filename": "notes.png", "file_path": str(non_image),
+        "expected_revision": state["revision"],
+    })
+    assert error["isError"] and "поддерживаемое изображение" in error["content"][0]["text"]
+
+
 @pytest.mark.parametrize("source, message", [
     ({}, "base64_data или file_path"),
     ({"file_path": "screen.png", "base64_data": "AAAA"}, "base64_data или file_path"),
     ({"file_path": "missing.png"}, "не найден"),
 ])
-def test_mcp_upload_image_rejects_invalid_file_sources(tmp_path, source, message):
+def test_mcp_upload_image_rejects_invalid_file_sources(tmp_path, source, message, monkeypatch):
     token = client.get("/api/session/init").json()["token"]
     _, state = _call_report_tool(token, "get_report_state", {})
     if "file_path" in source:
         source = {**source, "file_path": str(tmp_path / source["file_path"])}
+        monkeypatch.setenv("REPORT_ENGINE_MCP_FILE_ROOT", str(tmp_path))
     result, _ = _call_report_tool(token, "upload_image", {
         "filename": "screen.png", "expected_revision": state["revision"], **source,
     })
@@ -768,7 +812,7 @@ def test_mcp_upload_image_rejects_invalid_file_sources(tmp_path, source, message
     assert client.get(f"/api/session/{token}/images").json()["images"] == []
 
 
-def test_mcp_upload_images_accepts_files_and_remains_atomic(tmp_path):
+def test_mcp_upload_images_accepts_files_and_remains_atomic(tmp_path, monkeypatch):
     from app.engine.sessions import MAX_IMAGE_SIZE
 
     token = client.get("/api/session/init").json()["token"]
@@ -778,6 +822,7 @@ def test_mcp_upload_images_accepts_files_and_remains_atomic(tmp_path):
     large = tmp_path / "large.png"
     with large.open("wb") as output:
         output.truncate(MAX_IMAGE_SIZE + 1)
+    monkeypatch.setenv("REPORT_ENGINE_MCP_FILE_ROOT", str(tmp_path))
     invalid, _ = _call_report_tool(token, "upload_images", {
         "expected_revision": state["revision"], "images": [
             {"filename": "one.png", "file_path": str(path)},
@@ -812,15 +857,16 @@ async def test_mcp_file_reads_leave_loop_responsive_and_recheck_revision(tmp_pat
     session = session_manager.get_or_create()
     path = tmp_path / "screen.png"
     path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    monkeypatch.setenv("REPORT_ENGINE_MCP_FILE_ROOT", str(tmp_path))
     started = threading.Event()
     release = threading.Event()
     original = mcp_router.load_image_input
 
-    def delayed_read(args, decoder):
+    def delayed_read(args, decoder, **kwargs):
         started.set()
         if not release.wait(timeout=3):
             raise ValueError("Чтение файла заблокировало цикл событий")
-        return original(args, decoder)
+        return original(args, decoder, **kwargs)
 
     monkeypatch.setattr(mcp_router, "load_image_input", delayed_read)
     item = {"filename": "screen.png", "file_path": str(path)}

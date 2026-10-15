@@ -27,6 +27,7 @@ Own the FastAPI application that validates reports, generates DOCX/PDF files, se
 - Live `export_report` returns document bytes as base64 without server persistence; headless retains exclusive file creation in its configured output directory. The independent browser HTTP generation contract is unchanged.
 - `agent_resources.py` serves the canonical core and five allowlisted references in source/frozen runtimes. `get_capabilities` describes these resources, their UTF-8 hash/size versions, and runtime limits; `write_report` embeds only the core. Both MCP transports expose `agent_onboarding`; its local skill is client cache only and is never stored by the server.
 - Live and headless MCP share the `snapshot_id` contract, structured revision conflicts, operation-id replay protection, and batch result references; legacy revision arguments remain supported.
+- Live `file_path` sources are disabled unless `REPORT_ENGINE_MCP_FILE_ROOT` is an absolute existing directory; resolved paths and image signatures are checked before reading. Operation replay caches are bounded to 8 MiB with a 256 KiB per-result limit.
 
 ## Work Guidance
 

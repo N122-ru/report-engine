@@ -17,6 +17,8 @@ BATCH_SCHEMA = {
             },
         },
         "stop_on_error": {"type": "boolean", "default": False},
+        "expected_snapshot_id": {"type": "string"},
+        "operation_id": {"type": "string", "maxLength": 128},
     },
 }
 

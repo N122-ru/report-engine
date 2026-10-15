@@ -502,7 +502,7 @@ def test_headless_manifest_registers_batch_and_both_image_sources():
     assert schemas["batch"]["properties"]["calls"]["maxItems"] == 20
     assert schemas["upload_images"]["properties"]["images"]["maxItems"] == MAX_IMAGES_COUNT
     for name in ("upload_image", "upload_images"):
-        assert "expected_image_revision" in schemas[name]["required"]
+        assert "expected_image_revision" not in schemas[name]["required"]
     assert "file_path" in schemas["upload_image"]["properties"]
     assert "base64_data" not in schemas["upload_image"]["required"]
     assert "file_path" in schemas["upload_images"]["properties"]["images"]["items"]["properties"]

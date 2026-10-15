@@ -21,7 +21,7 @@ from .engine.agent_resources import (
     agent_onboarding_prompt, get_capabilities, read_agent_asset, read_reference,
     reference_resources,
 )
-from .engine.report_safety import conflict_payload, is_conflict_message
+from .engine.report_safety import conflict_payload, is_conflict_message, require_revision_guard
 from .version import APP_VERSION
 
 
@@ -146,12 +146,12 @@ def _tools() -> list[types.Tool]:
                 "filename": {"type": "string"},
                 "base64_data": {"type": "string"},
                 "file_path": {"type": "string", "description": "Путь к изображению на машине сервера; поддерживает ~ и относительные пути"},
-                "expected_image_revision": revision,
+                 "expected_image_revision": revision,
                 "expected_revision": revision,
                 "caption": {"type": "string"},
                 "insert_into_report": {"type": "boolean", "default": False},
             },
-            ["filename", "expected_image_revision"],
+            ["filename"],
             **IMAGE_SOURCE_SCHEMA,
         ),
         _tool(
@@ -173,7 +173,7 @@ def _tools() -> list[types.Tool]:
                 "expected_image_revision": revision,
                 "expected_revision": revision,
             },
-            ["images", "expected_image_revision"],
+            ["images"],
         ),
         _tool(
             "append_or_update_section",
@@ -183,26 +183,26 @@ def _tools() -> list[types.Tool]:
                 "section_content": {"type": "string"},
                 "expected_revision": revision,
             },
-            ["section_heading", "section_content", "expected_revision"],
+            ["section_heading", "section_content"],
         ),
         _tool(
             "update_meta",
             "Точечно обновить реквизиты по свежей meta_revision.",
             {"fields": {"type": "object"}, "expected_meta_revision": revision},
-            ["fields", "expected_meta_revision"],
+            ["fields"],
         ),
         _tool(
             "delete_image",
             "Удалить неиспользуемое изображение по свежей image_revision.",
             {"filename": {"type": "string"}, "expected_image_revision": revision},
-            ["filename", "expected_image_revision"],
+            ["filename"],
         ),
         _tool("lint_report", "Проверить текущий отчёт по ГОСТ.", {}, []),
         _tool(
             "autofix_typography",
             "Применить типографику к текущему Markdown по свежей revision.",
             {"expected_revision": revision},
-            ["expected_revision"],
+            [],
         ),
     ]
     formats = ["docx", "pdf"] if pdf_export_enabled() else ["docx"]
@@ -217,7 +217,7 @@ def _tools() -> list[types.Tool]:
             "expected_image_revision": revision,
             "confirm_blocked_export": {"type": "boolean", "default": False},
         },
-        ["filename", "expected_revision", "expected_meta_revision", "expected_image_revision"],
+        ["filename"],
     ))
     unified_fields = {
         "expected_snapshot_id": {
@@ -226,11 +226,12 @@ def _tools() -> list[types.Tool]:
         },
         "operation_id": {
             "type": "string",
+            "maxLength": 128,
             "description": "Необязательный ключ идемпотентности для безопасного повтора операции",
         },
     }
     for tool in tools:
-        if tool.name not in HEADLESS_MUTATING_TOOLS and tool.name != "batch":
+        if tool.name not in HEADLESS_MUTATING_TOOLS and tool.name not in {"batch", "get_images"}:
             continue
         tool.input_schema.setdefault("properties", {}).update(unified_fields)
     return tools
@@ -270,15 +271,35 @@ HEADLESS_MUTATING_TOOLS = frozenset({
     "append_or_update_section", "update_meta", "delete_image",
     "autofix_typography", "export_report",
 })
+HEADLESS_OPERATION_TOOLS = HEADLESS_MUTATING_TOOLS | {"get_images"}
+HEADLESS_REVISION_GUARDS = {
+    "import_profile": ("expected_meta_revision",),
+    "upload_image": ("expected_image_revision", "expected_revision"),
+    "upload_images": ("expected_image_revision", "expected_revision"),
+    "append_or_update_section": ("expected_revision",),
+    "update_meta": ("expected_meta_revision",),
+    "delete_image": ("expected_image_revision", "expected_revision"),
+    "autofix_typography": ("expected_revision",),
+    "export_report": ("expected_revision", "expected_meta_revision", "expected_image_revision"),
+}
 
 
 def _dispatch_tool(report: HeadlessReport, name: str, args: dict[str, Any]) -> types.CallToolResult:
-    """Deduplicate successful mutation calls before dispatching them."""
-    is_mutating = name in HEADLESS_MUTATING_TOOLS or (
+    """Deduplicate successful mutation and bounded image-read calls before dispatching."""
+    is_mutating = name in HEADLESS_OPERATION_TOOLS or (
         name == "batch" and any(call.get("name") in HEADLESS_MUTATING_TOOLS
                                  for call in args.get("calls", []) if isinstance(call, dict))
     )
     operation_id = args.get("operation_id")
+    if name == "batch" and args.get("expected_snapshot_id") is not None:
+        try:
+            validate_batch_calls(args)
+            report._check_expected(args.get("expected_snapshot_id"), {})
+        except (TypeError, ValueError, OSError, RuntimeError) as exc:
+            message = str(exc)
+            if is_conflict_message(message):
+                return _text_result(conflict_payload(message, report._revisions()), is_error=True)
+            return _text_result(message, is_error=True)
     if is_mutating and operation_id is not None:
         try:
             cached = report.operation_cache.lookup(operation_id, args, name)
@@ -295,8 +316,17 @@ def _dispatch_tool(report: HeadlessReport, name: str, args: dict[str, Any]) -> t
 def _dispatch_tool_uncached(report: HeadlessReport, name: str, args: dict[str, Any]) -> types.CallToolResult:
     """Dispatch one headless tool with the same error handling inside batches."""
     try:
+        if name in HEADLESS_REVISION_GUARDS:
+            if name == "import_profile" and report.metadata is None:
+                pass
+            elif name in {"upload_image", "upload_images", "delete_image"}:
+                require_revision_guard(args, (), alternatives=HEADLESS_REVISION_GUARDS[name])
+            else:
+                require_revision_guard(args, HEADLESS_REVISION_GUARDS[name])
         if name == "batch":
             calls = validate_batch_calls(args)
+            if args.get("expected_snapshot_id") is not None:
+                report._check_expected(args.get("expected_snapshot_id"), {})
             results = []
             previous_results = []
             for call in calls:
@@ -304,10 +334,15 @@ def _dispatch_tool_uncached(report: HeadlessReport, name: str, args: dict[str, A
                     call_args = resolve_batch_arguments(call["arguments"], previous_results)
                     response = _dispatch_tool(report, call["name"], call_args)
                     if response.is_error:
-                        error = response.structured_content or "\n".join(
+                        detail = response.structured_content if isinstance(response.structured_content, dict) else None
+                        error = (detail or "\n".join(
                             block.text for block in response.content if isinstance(block, types.TextContent)
-                        )
-                        results.append({"name": call["name"], "ok": False, "error": error})
+                        ))
+                        item = {"name": call["name"], "ok": False,
+                                "error": detail.get("error", str(error)) if detail else str(error)}
+                        if detail:
+                            item["error_detail"] = detail
+                        results.append(item)
                         previous_results.append(None)
                         if args.get("stop_on_error", False):
                             break
@@ -318,7 +353,13 @@ def _dispatch_tool_uncached(report: HeadlessReport, name: str, args: dict[str, A
                         results.append({"name": call["name"], "ok": True, "result": value})
                         previous_results.append(value)
                 except (TypeError, ValueError, OSError, RuntimeError) as exc:
-                    results.append({"name": call["name"], "ok": False, "error": str(exc)})
+                    detail = (conflict_payload(str(exc), report._revisions())
+                              if is_conflict_message(str(exc)) else None)
+                    item = {"name": call["name"], "ok": False,
+                            "error": detail["error"] if detail else str(exc)}
+                    if detail:
+                        item["error_detail"] = detail
+                    results.append(item)
                     previous_results.append(None)
                     if args.get("stop_on_error", False):
                         break

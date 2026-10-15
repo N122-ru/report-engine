@@ -154,6 +154,7 @@ class SessionData:
         if removed:
             self.image_hashes.pop(safe_name, None)
             self.deleted_images.add(safe_name)
+            self.operation_cache.clear()
             self.verification.changed()
             self.touch()
         return removed

@@ -216,6 +216,7 @@ class HeadlessReport:
             raise ValueError(f"Изображение «{safe_name}» не найдено")
         del self.images[safe_name]
         del self.image_hashes[safe_name]
+        self.operation_cache.clear()
         self.verification.changed()
         return self._revisions()
 
@@ -443,4 +444,7 @@ class HeadlessReport:
                 output.write(data)
         except FileExistsError as exc:
             raise ValueError("Файл уже существует; выберите новое имя") from exc
-        return {"path": str(target), "size_bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+        return {
+            "path": str(target), "size_bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+            **self._revisions(),
+        }

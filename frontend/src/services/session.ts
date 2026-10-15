@@ -3,6 +3,7 @@
  */
 
 import { fetchWithTimeout, retryAfterMs } from './http.ts';
+import type { ReportMetadata } from '../types';
 
 const STORAGE_KEY = 'report_session_token';
 const CLIENT_ID_KEY = 'report_session_client_id';
@@ -41,13 +42,15 @@ export interface SessionImageItem {
   url: string;
 }
 
+export type SessionMetadata = Partial<ReportMetadata>;
+
 export interface SessionInitResponse {
   token: string;
   content: string;
   revision: string;
   meta_revision: string;
   image_revision?: string;
-  meta: any;
+  meta: SessionMetadata;
   images?: SessionImageItem[];
   deleted?: string[];
 }
@@ -61,7 +64,7 @@ export interface SessionImagesResponse {
 export interface SessionSyncPayload {
   content?: string;
   content_patches?: ContentPatch[];
-  meta?: any;
+  meta?: SessionMetadata;
   expected_revision?: string;
   expected_meta_revision?: string;
   client_id?: string;
@@ -76,7 +79,7 @@ export interface ContentPatch {
 export type SessionSyncResult =
   | { status: 'ok'; revision: string; meta_revision: string }
   | { status: 'conflict'; conflict_type: 'content'; revision: string; content: string }
-  | { status: 'conflict'; conflict_type: 'meta'; meta_revision: string; meta: any };
+  | { status: 'conflict'; conflict_type: 'meta'; meta_revision: string; meta: SessionMetadata };
 
 export interface LiveSyncEvent {
   type: 'content_updated' | 'meta_updated' | 'image_added' | 'image_deleted';
@@ -88,7 +91,7 @@ export interface LiveSyncEvent {
   revision?: string;
   meta_revision?: string;
   image_revision?: string;
-  meta?: any;
+  meta?: SessionMetadata;
   meta_patch?: {
     base_revision: string;
     changed: Record<string, unknown>;

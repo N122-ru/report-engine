@@ -15,6 +15,12 @@ export interface ParsedBlock {
   estHeight: number;
 }
 
+interface PreviewListItem {
+  text: string;
+  depth: number;
+  estHeight: number;
+}
+
 interface PreviewParagraphData {
   text: string;
   lines: InlinePart[][];
@@ -109,9 +115,9 @@ export function paginatePreviewBlocks(allBlocks: ParsedBlock[], pageBreakBeforeH
       return;
     }
     if (block.type === 'list') {
-      const items = block.data.items || [];
+      const items = (block.data.items || []) as PreviewListItem[];
       const startNum = Math.max(1, block.data.start || 1);
-      let curChunk: any[] = [];
+      let curChunk: PreviewListItem[] = [];
       let curChunkStart = startNum;
       const flushChunk = () => {
         if (curChunk.length === 0) return;
@@ -119,11 +125,11 @@ export function paginatePreviewBlocks(allBlocks: ParsedBlock[], pageBreakBeforeH
           id: `${block.id}-p${pages.length}-${curChunkStart}`,
           type: 'list',
           data: { items: curChunk, start: curChunkStart },
-          estHeight: curChunk.reduce((sum: number, item: any) => sum + (item.estHeight || 21), 0)
+           estHeight: curChunk.reduce((sum, item) => sum + (item.estHeight || 21), 0)
         });
         curChunk = [];
       };
-      items.forEach((item: any, itemIdx: number) => {
+       items.forEach((item, itemIdx) => {
         const height = item.estHeight || 21;
         const isPageEmpty = pages[pages.length - 1].length === 0 && curChunk.length === 0;
         if (!isPageEmpty && currentHeight + height > MAX_PAGE_CONTENT_HEIGHT) {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ReportMetadata, StudentInfo, TeacherInfo, TEACHER_ROLES, LogoMode, ReferenceItem, REFERENCE_KINDS, emptyReference } from '../types';
 import { formatReference } from '../services/bibliography';
 import { 
@@ -42,10 +42,19 @@ export const MetadataForm: React.FC<MetadataFormProps> = ({
     saveSubjectPresets(updated);
   };
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
+  const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
+  }, []);
 
   const showStatus = (msg: string) => {
+    if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
     setStatusMsg(msg);
-    setTimeout(() => setStatusMsg(null), 2500);
+    statusTimerRef.current = setTimeout(() => {
+      setStatusMsg(null);
+      statusTimerRef.current = null;
+    }, 2500);
   };
 
   const updateField = <K extends keyof ReportMetadata>(field: K, val: ReportMetadata[K]) => {

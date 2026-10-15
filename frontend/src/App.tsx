@@ -54,7 +54,7 @@ const REPORT_META_KEY = 'report_meta';
 const REPORT_CONTENT_KEY = 'report_content';
 type RemoteConflict = {
   content?: { content: string; revision: string };
-  meta?: { meta: ReportMetadata; revision: string };
+  meta?: { meta: Partial<ReportMetadata>; revision: string };
 };
 
 // Missing image attachments become DOCX placeholders; warn before download.

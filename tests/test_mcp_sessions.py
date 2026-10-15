@@ -7,6 +7,11 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 client = TestClient(app)
+VALID_PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01"
+    b"\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
 
 
 def _list_all_mcp_tools(token):
@@ -67,6 +72,66 @@ def test_session_sync_accepts_compact_unicode_content_patch():
     })
     assert patch.status_code == 200
     assert client.get(f"/api/session/init?token={token}").json()["content"] == "Параметр: 🙂\nНовое значение"
+
+
+def test_session_sync_rejects_oversized_full_content():
+    from app.engine.security import MAX_MARKDOWN_SIZE
+
+    token = client.get("/api/session/init").json()["token"]
+    response = client.post(
+        f"/api/session/{token}/sync",
+        json={"content": "x" * (MAX_MARKDOWN_SIZE + 1)},
+    )
+
+    assert response.status_code == 413
+    assert client.get(f"/api/session/init?token={token}").json()["content"] == ""
+
+
+@pytest.mark.anyio
+async def test_browser_sync_serializes_content_and_metadata_writes():
+    import asyncio
+    from app.engine.mcp_router import sync_session
+    from app.engine.sessions import session_manager
+
+    session = session_manager.get_or_create()
+    initial_revision = session.revision
+    initial_meta_revision = session.meta_revision
+    content_broadcast_entered = asyncio.Event()
+    release_content_broadcast = asyncio.Event()
+    original_broadcast = session.broadcast
+
+    async def blocking_broadcast(event):
+        if event["type"] == "content_updated":
+            content_broadcast_entered.set()
+            await release_content_broadcast.wait()
+        await original_broadcast(event)
+
+    session.broadcast = blocking_broadcast
+    try:
+        first = asyncio.create_task(sync_session(session.token, {
+            "content": "Первая запись",
+            "meta": {"work_theme": "Первая тема"},
+            "expected_revision": initial_revision,
+            "expected_meta_revision": initial_meta_revision,
+        }))
+        await content_broadcast_entered.wait()
+
+        second = asyncio.create_task(sync_session(session.token, {
+            "meta": {"work_theme": "Вторая тема"},
+            "expected_meta_revision": initial_meta_revision,
+        }))
+        await asyncio.sleep(0)
+
+        assert not second.done()
+        assert session.meta == {}
+
+        release_content_broadcast.set()
+        assert (await first)["status"] == "ok"
+        conflict = await second
+        assert conflict.status_code == 409
+        assert session.meta == {"work_theme": "Первая тема"}
+    finally:
+        del session.broadcast
 
 
 @pytest.mark.anyio
@@ -515,7 +580,7 @@ def test_mcp_delete_image_tool():
 
 def test_mcp_batch_delete_images_is_atomic_and_skips_referenced_files():
     token = client.get("/api/session/init").json()["token"]
-    sample = b"image bytes"
+    sample = VALID_PNG
     upload = client.post(
         f"/api/session/{token}/images",
         files=[
@@ -549,20 +614,22 @@ def test_mcp_batch_delete_images_is_atomic_and_skips_referenced_files():
 
 def test_stale_mcp_image_revision_cannot_delete_replacement():
     token = client.get("/api/session/init").json()["token"]
-    client.post(f"/api/session/{token}/images", files={"files": ("screen.png", b"first", "image/png")})
+    first_image = VALID_PNG + b"first"
+    replacement = VALID_PNG + b"replacement"
+    client.post(f"/api/session/{token}/images", files={"files": ("screen.png", first_image, "image/png")})
     first = client.get(f"/api/session/init?token={token}").json()
     removed = client.delete(
         f"/api/session/{token}/images/screen.png?expected_image_revision={first['image_revision']}"
     )
     assert removed.status_code == 200
-    client.post(f"/api/session/{token}/images", files={"files": ("screen.png", b"replacement", "image/png")})
+    client.post(f"/api/session/{token}/images", files={"files": ("screen.png", replacement, "image/png")})
     result, _ = _call_report_tool(token, "delete_image", {
         "filename": "screen.png",
         "expected_revision": first["revision"],
         "expected_image_revision": first["image_revision"],
     })
     assert result["isError"] is True
-    assert client.get(f"/api/session/{token}/images/screen.png").content == b"replacement"
+    assert client.get(f"/api/session/{token}/images/screen.png").content == replacement
 
 
 def test_session_accepts_150_images():
@@ -847,6 +914,34 @@ def test_mcp_upload_image_rejects_invalid_file_sources(tmp_path, source, message
     })
     assert result["isError"] is True
     assert message in result["content"][0]["text"]
+    assert client.get(f"/api/session/{token}/images").json()["images"] == []
+
+
+def test_mcp_base64_upload_rejects_non_image_bytes():
+    import base64
+
+    token = client.get("/api/session/init").json()["token"]
+    _, state = _call_report_tool(token, "get_report_state", {})
+    result, _ = _call_report_tool(token, "upload_image", {
+        "filename": "notes.png",
+        "base64_data": base64.b64encode(b"not an image").decode(),
+        "expected_revision": state["revision"],
+    })
+
+    assert result["isError"] is True
+    assert "поддерживаемое изображение" in result["content"][0]["text"]
+    assert client.get(f"/api/session/{token}/images").json()["images"] == []
+
+
+def test_browser_image_upload_rejects_non_image_bytes():
+    token = client.get("/api/session/init").json()["token"]
+    response = client.post(
+        f"/api/session/{token}/images",
+        files={"files": ("notes.png", b"not an image", "image/png")},
+    )
+
+    assert response.status_code == 400
+    assert "поддерживаемое изображение" in response.json()["detail"]
     assert client.get(f"/api/session/{token}/images").json()["images"] == []
 
 
@@ -1222,7 +1317,7 @@ def test_batch_upload_images_inserts_at_anchor_and_rejects_partial_invalid_batch
     client.post(f"/api/session/{token}/sync", json={"content": original})
     _, outline = _call_report_tool(token, "get_document_outline", {})
     anchor = next(b for b in outline["blocks"] if b["type"] == "paragraph" and "Подготовлен" in b["preview"])
-    encoded = base64.b64encode(b"picture").decode()
+    encoded = base64.b64encode(VALID_PNG).decode()
     invalid, _ = _call_report_tool(token, "upload_images", {
         "expected_revision": outline["revision"],
         "images": [
@@ -1251,17 +1346,17 @@ def test_single_mcp_upload_rejects_missing_revision_bad_base64_and_existing_name
     import base64
     token = client.get("/api/session/init").json()["token"]
     _, state = _call_report_tool(token, "get_report_state", {})
-    original = b"original screenshot"
+    original = VALID_PNG + b"original screenshot"
     client.post(f"/api/session/{token}/images", files={"files": ("Wi-Fi.png", original, "image/png")})
 
     missing, _ = _call_report_tool(token, "upload_image", {
-        "filename": "other.png", "base64_data": base64.b64encode(b"picture").decode()
+        "filename": "other.png", "base64_data": base64.b64encode(VALID_PNG).decode()
     })
     bad, _ = _call_report_tool(token, "upload_image", {
         "filename": "other.png", "base64_data": "!!!", "expected_revision": state["revision"]
     })
     collision, _ = _call_report_tool(token, "upload_image", {
-        "filename": "Wi-Fi.png", "base64_data": base64.b64encode(b"replacement").decode(),
+        "filename": "Wi-Fi.png", "base64_data": base64.b64encode(VALID_PNG + b"replacement").decode(),
         "expected_revision": state["revision"]
     })
     assert missing["isError"] and bad["isError"] and collision["isError"]
@@ -1273,7 +1368,7 @@ def test_browser_image_batch_failure_leaves_no_partial_upload():
     from app.engine.sessions import MAX_IMAGE_SIZE
     token = client.get("/api/session/init").json()["token"]
     response = client.post(f"/api/session/{token}/images", files=[
-        ("files", ("first.png", b"first", "image/png")),
+        ("files", ("first.png", VALID_PNG, "image/png")),
         ("files", ("oversized.png", b"x" * (MAX_IMAGE_SIZE + 1), "image/png")),
     ])
     assert response.status_code == 400
@@ -1283,19 +1378,20 @@ def test_browser_image_batch_failure_leaves_no_partial_upload():
 def test_browser_image_upload_cannot_replace_original_through_sanitized_name():
     token = client.get("/api/session/init").json()["token"]
     first = client.post(f"/api/session/{token}/images", files={
-        "files": ("Схема сети.png", b"original", "image/png")
+        "files": ("Схема сети.png", VALID_PNG + b"original", "image/png")
     })
     assert first.status_code == 200
     second = client.post(f"/api/session/{token}/images", files={
-        "files": ("Схема_сети.png", b"processed", "image/png")
+        "files": ("Схема_сети.png", VALID_PNG + b"processed", "image/png")
     })
     assert second.status_code == 400
-    assert client.get(f"/api/session/{token}/images/Схема_сети.png").content == b"original"
+    assert client.get(f"/api/session/{token}/images/Схема_сети.png").content == VALID_PNG + b"original"
 
 
 def test_mcp_cannot_delete_image_still_referenced_by_markdown():
     token = client.get("/api/session/init").json()["token"]
-    client.post(f"/api/session/{token}/images", files={"files": ("used.png", b"picture", "image/png")})
+    used_image = VALID_PNG + b"picture"
+    client.post(f"/api/session/{token}/images", files={"files": ("used.png", used_image, "image/png")})
     client.post(f"/api/session/{token}/sync", json={"content": "![Схема](used.png)"})
     _, state = _call_report_tool(token, "get_report_state", {})
     result, _ = _call_report_tool(token, "delete_image", {
@@ -1303,13 +1399,13 @@ def test_mcp_cannot_delete_image_still_referenced_by_markdown():
         "expected_image_revision": state["image_revision"]
     })
     assert result["isError"] is True
-    assert client.get(f"/api/session/{token}/images/used.png").content == b"picture"
+    assert client.get(f"/api/session/{token}/images/used.png").content == used_image
 
 
 def test_live_session_tracks_image_deletions_until_the_server_restarts():
     token = client.get("/api/session/init").json()["token"]
     client.post(f"/api/session/{token}/images", files={
-        "files": ("Схема сети.png", b"original", "image/png")
+        "files": ("Схема сети.png", VALID_PNG + b"original", "image/png")
     })
     _, state = _call_report_tool(token, "get_report_state", {})
     result, _ = _call_report_tool(token, "delete_image", {
@@ -1322,7 +1418,7 @@ def test_live_session_tracks_image_deletions_until_the_server_restarts():
     assert images["deleted"] == ["Схема_сети.png"]
 
     client.post(f"/api/session/{token}/images", files={
-        "files": ("Схема_сети.png", b"new original", "image/png")
+        "files": ("Схема_сети.png", VALID_PNG + b"new original", "image/png")
     })
     assert client.get(f"/api/session/{token}/images").json()["deleted"] == []
 
@@ -1330,7 +1426,7 @@ def test_live_session_tracks_image_deletions_until_the_server_restarts():
 def test_restore_upload_cannot_undo_deletion_after_a_stale_image_list():
     token = client.get("/api/session/init").json()["token"]
     client.post(f"/api/session/{token}/images", files={
-        "files": ("old.png", b"original", "image/png")
+        "files": ("old.png", VALID_PNG + b"original", "image/png")
     })
     _, state = _call_report_tool(token, "get_report_state", {})
     result, _ = _call_report_tool(token, "delete_image", {
@@ -1339,7 +1435,7 @@ def test_restore_upload_cannot_undo_deletion_after_a_stale_image_list():
     })
     assert result["isError"] is False
     stale_restore = client.post(f"/api/session/{token}/images?restoring=true", files={
-        "files": ("old.png", b"original", "image/png")
+        "files": ("old.png", VALID_PNG + b"original", "image/png")
     })
     assert stale_restore.status_code == 409
     assert client.get(f"/api/session/{token}/images").json()["images"] == []
@@ -1476,7 +1572,7 @@ def test_mcp_multimodal_image_tools():
     assert base64.b64decode(batch_blocks[0]["data"]) == sample_png
 
     # The agent uploads a new chart through upload_image.
-    b64_graph = base64.b64encode(b"FAKE_PNG_GRAPH_DATA").decode("ascii")
+    b64_graph = base64.b64encode(sample_png).decode("ascii")
     current = client.get(f"/api/session/init?token={token}").json()
     upload_call = client.post(
         f"/api/mcp/messages?token={token}",

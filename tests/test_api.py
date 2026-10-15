@@ -41,6 +41,19 @@ def test_generate_docx():
     with open("test_output.docx", "wb") as f:
         f.write(res.content)
 
+
+def test_generate_rejects_invalid_image_bytes():
+    import json
+
+    response = client.post(
+        "/api/generate",
+        data={"meta": json.dumps({"work_number": 1}), "content": "Текст."},
+        files={"images": ("broken.png", b"not an image", "image/png")},
+    )
+
+    assert response.status_code == 400
+    assert "поддерживаемое изображение" in response.json()["detail"]
+
 def test_autofix():
     bad_md = '# 1. Цель работы.\n\n![Схема сети - тестовая.](net.png)\n\n```python\nmsg = "hello - world"\nval = x - y\n```\n\n\n\n\n# 2. Выводы.'
     res = client.post("/api/autofix", data={"content": bad_md})
@@ -278,4 +291,3 @@ def test_autofix_simplifies_robotic_status():
     assert "активен, обеспечивает" in fixed
     assert "среда передачи недоступна" in fixed
     assert any("состояния" in fix for fix in res.json()["fixes_applied"])
-

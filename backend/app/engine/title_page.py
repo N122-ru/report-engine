@@ -5,6 +5,7 @@ Read institutional details from metadata, with placeholders for empty fields.
 """
 
 import base64
+import binascii
 import os
 import re
 import tempfile
@@ -23,6 +24,9 @@ from .oxml_utils import (
     set_cell_bottom_border,
     set_table_row_cant_split
 )
+from .image_input import validate_image_data
+
+MAX_CUSTOM_LOGO_SIZE = 2 * 1024 * 1024
 
 candidate_paths = [
     os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "assets", "default_logo.png")),
@@ -42,16 +46,23 @@ def _resolve_custom_logo(custom_logo: str | None) -> str | None:
     if not custom_logo or not custom_logo.strip():
         return None
     raw = custom_logo.strip()
-    # Data-URL: data:image/png;base64,....
-    if "," in raw and ";base64," in raw:
+    # Data-URL: accept only the formats advertised by the browser picker.
+    data_url = re.fullmatch(r"data:image/(png|jpe?g);base64,(.+)", raw, flags=re.IGNORECASE | re.DOTALL)
+    if data_url:
         try:
-            _, b64 = raw.split(";base64,", 1)
-            data = base64.b64decode(b64)
-        except Exception:
+            data = base64.b64decode(data_url.group(2), validate=True)
+            if len(data) > MAX_CUSTOM_LOGO_SIZE:
+                return None
+            validate_image_data(data)
+            logo_kind = data_url.group(1).lower()
+            if (logo_kind == "png" and not data.startswith(b"\x89PNG\r\n\x1a\n")) or (
+                logo_kind in {"jpeg", "jpg"} and not data.startswith(b"\xff\xd8\xff")
+            ):
+                return None
+        except (ValueError, binascii.Error):
             return None
         suffix = ".png"
-        low_head = raw[:40].lower()
-        if "jpeg" in low_head or "jpg" in low_head:
+        if logo_kind in {"jpeg", "jpg"}:
             suffix = ".jpg"
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
         try:
@@ -61,6 +72,14 @@ def _resolve_custom_logo(custom_logo: str | None) -> str | None:
         except Exception:
             return None
     if os.path.exists(raw):
+        try:
+            with open(raw, "rb") as source:
+                data = source.read(MAX_CUSTOM_LOGO_SIZE + 1)
+            if len(data) > MAX_CUSTOM_LOGO_SIZE:
+                return None
+            validate_image_data(data)
+        except (OSError, ValueError):
+            return None
         return raw
     return None
 

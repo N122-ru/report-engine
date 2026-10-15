@@ -32,6 +32,7 @@ from .engine.security import (
     MAX_IMAGES_COUNT,
     MAX_VERIFY_SIZE
 )
+from .engine.image_input import validate_image_data
 
 from .engine.mcp_router import router as mcp_router
 
@@ -140,6 +141,10 @@ async def generate_report(
             content_bytes = await img.read(MAX_IMAGE_SIZE + 1)
             if len(content_bytes) > MAX_IMAGE_SIZE:
                 raise HTTPException(status_code=413, detail=f"Размер файла «{img.filename}» превышает лимит {MAX_IMAGE_SIZE // (1024 * 1024)} МБ")
+            try:
+                validate_image_data(content_bytes)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"Недопустимое изображение «{img.filename}»: {exc}") from exc
             images_dict[img.filename] = content_bytes
             basename = os.path.basename(img.filename)
             images_dict[basename] = content_bytes

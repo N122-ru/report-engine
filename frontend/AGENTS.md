@@ -15,6 +15,7 @@ Own the React and TypeScript single-page application, its browser-side services,
 - Keep user-facing UI copy, validation messages, and report-facing text in Russian.
 - Keep TypeScript, CSS class names, tests, comments, and developer documentation in English.
 - Preserve parity between browser-side mirrors and their backend counterparts where the root guidance requires it.
+- Custom logos are limited to 2 MiB and accepted only when their bytes match PNG or JPEG signatures; client checks are UX validation and the backend remains authoritative.
 - Keep editor state, browser storage, image synchronization, revision handling, and conflict resolution behavior explicit and lossless.
 - Keep `report-engine-profile` JSON serialization versioned and validate profile imports before adding templates or changing requisites.
 - Profile imports must retain the existing session `meta_revision` conflict path and must not silently overwrite remote metadata.

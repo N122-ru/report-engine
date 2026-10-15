@@ -19,7 +19,9 @@ Own the FastAPI application that validates reports, generates DOCX/PDF files, se
 - Keep the backend and frontend implementations aligned where the same formatter or validation behavior is mirrored.
 - Validate the shared `report-engine-profile` format at the MCP boundary and apply it atomically under the current metadata revision.
 - Treat PDF as a runtime capability; DOCX generation must not depend on an office converter.
-- `app/engine/image_input.py` owns the shared 15 MiB image limit and 150-image count limit. HTTP, sessions, and headless re-export these constants; local MCP image paths use bounded reads and exactly one of `base64_data` or `file_path`.
+- `app/engine/image_input.py` owns shared image limits and magic-byte validation. HTTP, sessions, and headless re-export the size/count constants; every image ingress validates supported signatures, and local MCP image paths use bounded reads with exactly one of `base64_data` or `file_path`.
+- `SessionData.mcp_write_lock` serializes every live text, metadata, and image mutation from both MCP and browser HTTP routes; revision checks and the corresponding state write stay inside that lock.
+- `security.validate_markdown_size` is the shared 500 KiB guard for live session text. Session writes reject oversized content even when they do not enter through the main document-generation route.
 - `batch` preflights all 1–20 calls and rejects nesting before execution. Calls run sequentially without rollback; live batches containing mutations hold `session.mcp_write_lock` for the entire sequence, while read-only calls remain unlocked.
 - Live `upload_images` remains atomic; headless `upload_images` checks revisions once and returns ordered per-item errors while retaining valid uploads. Live file reads run through `asyncio.to_thread`, with revision rechecks before writes.
 - `report_safety.py` owns stateless prose guards, digest data, and verification state shared by both MCP transports. Every actual text/metadata/image mutation invalidates lint, including browser writes and rollback; no-op writes do not.

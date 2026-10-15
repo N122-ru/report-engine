@@ -23,7 +23,7 @@ from fastapi import APIRouter, Request, Response, HTTPException, Query, Body, Up
 from fastapi.responses import StreamingResponse
 
 from .sessions import session_manager, SessionData, MAX_IMAGE_SIZE, MAX_IMAGES_COUNT
-from .security import MAX_MARKDOWN_SIZE
+from .security import MAX_MARKDOWN_SIZE, validate_markdown_size
 from ..models.report import ReportMetadata, GenerateOptions, ImageLayout
 from .generator import build_docx_report
 from .linter import lint_docx_document
@@ -72,6 +72,19 @@ def _decode_image_data(encoded: str, filename: str) -> bytes:
     return data
 
 
+async def _load_validated_image_input(args: dict, filename: str) -> bytes:
+    """Load one MCP image and validate its bytes regardless of the source."""
+    if "file_path" in args:
+        _require_local_file_access("передайте изображение через base64_data")
+    raw = await asyncio.to_thread(
+        load_image_input,
+        args,
+        lambda encoded: _decode_image_data(encoded.strip(), filename),
+    )
+    validate_image_data(raw)
+    return raw
+
+
 def _apply_content_patches(content: str, patches: Any) -> str:
     if not isinstance(patches, list) or not 1 <= len(patches) <= 200:
         raise HTTPException(status_code=422, detail="content_patches должен содержать от 1 до 200 операций")
@@ -99,8 +112,10 @@ def _apply_content_patches(content: str, patches: Any) -> str:
     result = content
     for start, delete_count, insert in reversed(ordered):
         result = result[:start] + insert + result[start + delete_count:]
-    if len(result.encode("utf-8")) > MAX_MARKDOWN_SIZE:
-        raise HTTPException(status_code=413, detail="Размер текста отчета превышает допустимый лимит (500 КБ)")
+    try:
+        validate_markdown_size(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     return result
 
 
@@ -885,13 +900,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         if not filename:
             raise ValueError("Не указан filename")
 
-        if "file_path" in args:
-            _require_local_file_access("передайте изображение через base64_data")
-        raw_bytes = await asyncio.to_thread(
-            load_image_input, args, lambda encoded: _decode_image_data(encoded.strip(), filename),
-        )
-        if "file_path" in args:
-            validate_image_data(raw_bytes)
+        raw_bytes = await _load_validated_image_input(args, filename)
         _check_expected_snapshot(args, session, ("revision",))
         safe_name = session.add_image(filename, raw_bytes)
 
@@ -947,13 +956,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
             if name in names:
                 raise ValueError(f"Повторяющееся имя изображения: {name}")
             names.add(name)
-            if "file_path" in item:
-                _require_local_file_access("передайте изображение через base64_data")
-            raw = await asyncio.to_thread(
-                load_image_input, item, lambda encoded: _decode_image_data(encoded, name),
-            )
-            if "file_path" in item:
-                validate_image_data(raw)
+            raw = await _load_validated_image_input(item, name)
             staged.append((name, raw))
             anchor_id = item.get("after_block_id")
             if anchor_id is not None:
@@ -1509,35 +1512,49 @@ async def upload_session_images(
 ):
     """Upload browser images into the session."""
     session = session_manager.get_or_create(token)
-    if not 1 <= len(files) <= MAX_IMAGES_COUNT or len(session.images) + len(files) > MAX_IMAGES_COUNT:
+    if not 1 <= len(files) <= MAX_IMAGES_COUNT:
         raise HTTPException(status_code=400, detail="Превышено допустимое число изображений")
     staged = []
-    names = set(session.images)
+    names = set()
     for file in files:
         name = SessionData.sanitize_filename(file.filename or "image.png")
         data = await file.read(MAX_IMAGE_SIZE + 1)
-        if restoring and name in session.deleted_images:
-            raise HTTPException(status_code=409, detail=f"Изображение «{name}» было удалено из живой сессии")
         if name in names or not data or len(data) > MAX_IMAGE_SIZE:
             raise HTTPException(status_code=400, detail=f"Недопустимый или повторяющийся файл: {name}")
+        try:
+            validate_image_data(data)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Недопустимое изображение «{name}»: {exc}") from exc
         names.add(name)
         staged.append((name, data))
 
-    uploaded = []
-    for name, data in staged:
-        session.add_image(name, data)
-        uploaded.append({"filename": name, "size_bytes": len(data),
-                         "url": f"/api/session/{token}/images/{name}"})
-    for item in uploaded:
-        item["image_revision"] = session.image_revision
-    for name, data in staged:
-        await session.broadcast({
-            "type": "image_added", "source": "web", "filename": name,
-            "size": len(data), "url": f"/api/session/{token}/images/{name}",
-            "client_id": client_id, "image_revision": session.image_revision,
-            "timestamp": time.time()
-        })
-    return {"uploaded": uploaded, **_session_snapshot(session)}
+    async with session.mcp_write_lock:
+        if len(session.images) + len(staged) > MAX_IMAGES_COUNT:
+            raise HTTPException(status_code=400, detail="Превышено допустимое число изображений")
+        current_names = set(session.images)
+        duplicate = next((name for name, _data in staged if name in current_names), None)
+        if duplicate is not None:
+            raise HTTPException(status_code=400, detail=f"Недопустимый или повторяющийся файл: {duplicate}")
+        if restoring:
+            deleted = next((name for name, _data in staged if name in session.deleted_images), None)
+            if deleted is not None:
+                raise HTTPException(status_code=409, detail=f"Изображение «{deleted}» было удалено из живой сессии")
+
+        uploaded = []
+        for name, data in staged:
+            session.add_image(name, data)
+            uploaded.append({"filename": name, "size_bytes": len(data),
+                             "url": f"/api/session/{token}/images/{name}"})
+        for item in uploaded:
+            item["image_revision"] = session.image_revision
+        for name, data in staged:
+            await session.broadcast({
+                "type": "image_added", "source": "web", "filename": name,
+                "size": len(data), "url": f"/api/session/{token}/images/{name}",
+                "client_id": client_id, "image_revision": session.image_revision,
+                "timestamp": time.time()
+            })
+        return {"uploaded": uploaded, **_session_snapshot(session)}
 
 
 @router.get("/api/session/{token}/images")
@@ -1571,30 +1588,29 @@ async def delete_session_image(
 ):
     """Delete an image from the session."""
     session = session_manager.get_or_create(token)
-    if expected_image_revision is not None and expected_image_revision != session.image_revision:
-        raise HTTPException(status_code=409, detail="Набор изображений изменился, обновите manifest")
-    success = session.delete_image(filename)
-    if success:
-        await session.broadcast({
-            "type": "image_deleted",
-            "source": "web",
+    async with session.mcp_write_lock:
+        if expected_image_revision is not None and expected_image_revision != session.image_revision:
+            raise HTTPException(status_code=409, detail="Набор изображений изменился, обновите manifest")
+        success = session.delete_image(filename)
+        if success:
+            await session.broadcast({
+                "type": "image_deleted",
+                "source": "web",
+                "filename": filename,
+                "client_id": client_id,
+                "image_revision": session.image_revision,
+                "timestamp": time.time()
+            })
+        return {
+            "status": "deleted" if success else "not_found",
             "filename": filename,
-            "client_id": client_id,
-            "image_revision": session.image_revision,
-            "timestamp": time.time()
-        })
-    return {
-        "status": "deleted" if success else "not_found",
-        "filename": filename,
-        **_session_snapshot(session),
-    }
+            **_session_snapshot(session),
+        }
 
 
 
-@router.post("/api/session/{token}/sync")
-async def sync_session(token: str, payload: dict = Body(...)):
-    """Accept browser updates from manual report editing."""
-    session = session_manager.get_or_create(token)
+async def _sync_session_locked(token: str, payload: dict, session: SessionData):
+    """Apply one browser synchronization payload while its session is locked."""
     has_content = "content" in payload
     has_content_patches = "content_patches" in payload
     if has_content and has_content_patches:
@@ -1620,6 +1636,10 @@ async def sync_session(token: str, payload: dict = Body(...)):
         if not isinstance(payload["content"], str):
             raise HTTPException(status_code=422, detail="content должен быть строкой")
         next_content = payload["content"]
+        try:
+            validate_markdown_size(next_content)
+        except ValueError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
         expected = payload.get("expected_revision")
         if expected is not None and expected != session.revision and payload["content"] != session.content:
             return Response(
@@ -1651,6 +1671,14 @@ async def sync_session(token: str, payload: dict = Body(...)):
         )
     session.touch()
     return {"status": "ok", "token": token, **_session_snapshot(session)}
+
+
+@router.post("/api/session/{token}/sync")
+async def sync_session(token: str, payload: dict = Body(...)):
+    """Accept browser updates from manual report editing."""
+    session = session_manager.get_or_create(token)
+    async with session.mcp_write_lock:
+        return await _sync_session_locked(token, payload, session)
 
 
 @router.get("/api/session/{token}/events")

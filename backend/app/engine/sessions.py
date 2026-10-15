@@ -22,6 +22,7 @@ from typing import Dict, List, Optional, Set, Any
 from .markdown_parser import _image_size
 from .image_input import MAX_IMAGE_SIZE, MAX_IMAGES_COUNT
 from .report_safety import OperationCache, ReportVerification, with_snapshot
+from .security import validate_markdown_size
 
 MAX_INACTIVE_HOURS = 48
 
@@ -197,7 +198,6 @@ class SessionManager:
     """Manage the lifecycle of in-memory sessions without disk writes."""
     def __init__(self):
         self._sessions: Dict[str, SessionData] = {}
-        self._lock = asyncio.Lock()
 
     def _is_valid_token(self, token: str) -> bool:
         return bool(re.match(r"^(?:tok_|rep_tok_)[a-zA-Z0-9_\-]+$", token))
@@ -247,6 +247,7 @@ class SessionManager:
         section_name: Optional[str] = None,
         client_id: Optional[str] = None,
     ) -> SessionData:
+        validate_markdown_size(content)
         session = self.get_or_create(token)
         if content == session.content:
             return session

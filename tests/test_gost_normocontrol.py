@@ -10,6 +10,14 @@ from app.engine.generator import build_docx_report
 from app.engine.linter import lint_docx_document
 from app.engine.typography import apply_typography_rules, clean_figure_caption, clean_table_caption
 
+
+def test_invalid_custom_logo_data_url_does_not_break_docx_generation():
+    meta = ReportMetadata(logo_mode="custom", custom_logo="data:image/png;base64,AAAA")
+
+    document = docx.Document(build_docx_report(meta, ""))
+
+    assert document.paragraphs
+
 def test_typography_edge_cases():
     # 1. Quotes with inches
     text = 'Экран 15" и процессор "Core i7"'

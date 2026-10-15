@@ -153,10 +153,19 @@ export const MetadataForm: React.FC<MetadataFormProps> = ({
     showStatus("Глобальный профиль вуза сохранён");
   };
 
-  const handleCustomLogoFile = (file?: File | null) => {
+  const handleCustomLogoFile = async (file?: File | null) => {
     if (!file) return;
     if (file.size > 2 * 1024 * 1024) {
       showStatus("Логотип слишком велик (максимум 2 МБ)");
+      return;
+    }
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const isPng = bytes.length >= 8
+      && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
+      && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a;
+    const isJpeg = bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+    if (!isPng && !isJpeg) {
+      showStatus("Выберите корректный файл PNG или JPG");
       return;
     }
     const reader = new FileReader();
@@ -164,6 +173,7 @@ export const MetadataForm: React.FC<MetadataFormProps> = ({
       updateField('custom_logo', reader.result as string);
       updateField('logo_mode', 'custom');
     };
+    reader.onerror = () => showStatus("Не удалось прочитать файл логотипа");
     reader.readAsDataURL(file);
   };
 
@@ -513,7 +523,7 @@ export const MetadataForm: React.FC<MetadataFormProps> = ({
                           type="file"
                           accept="image/png,image/jpeg"
                           className="hidden"
-                          onChange={e => handleCustomLogoFile(e.target.files?.[0])}
+                          onChange={e => { void handleCustomLogoFile(e.target.files?.[0]); }}
                         />
                       </label>
                       {meta.custom_logo && (

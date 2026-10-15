@@ -20,6 +20,14 @@ MAX_VERIFY_SIZE = 25 * 1024 * 1024        # 25 MB per uploaded DOCX audit.
 PDF_SEMAPHORE = asyncio.Semaphore(2)
 
 
+def validate_markdown_size(content: str) -> None:
+    """Reject report text that exceeds the in-memory processing limit."""
+    if not isinstance(content, str):
+        raise ValueError("Текст отчёта должен быть строкой")
+    if len(content.encode("utf-8")) > MAX_MARKDOWN_SIZE:
+        raise ValueError("Размер текста отчёта превышает допустимый лимит (500 КБ)")
+
+
 class SimpleRateLimiter:
     """Apply a sliding-window rate limit in memory without an external database."""
     def __init__(self):

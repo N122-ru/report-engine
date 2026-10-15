@@ -485,7 +485,7 @@ def test_live_rollback_and_browser_mutations_invalidate_lint():
         assert client.post(f"/api/session/{token}/sync", json=payload).status_code == 200
         assert not call("get_report_state")["verify_state"]["lint_after_last_change"]
     call("lint_report")
-    assert client.post(f"/api/session/{token}/images", files={"files": ("unused.png", b"image", "image/png")}).status_code == 200
+    assert client.post(f"/api/session/{token}/images", files={"files": ("unused.png", b"\x89PNG\r\n\x1a\n", "image/png")}).status_code == 200
     assert not call("get_report_state")["verify_state"]["lint_after_last_change"]
     call("lint_report")
     assert client.delete(f"/api/session/{token}/images/unused.png").status_code == 200

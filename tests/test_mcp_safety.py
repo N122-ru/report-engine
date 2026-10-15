@@ -728,3 +728,15 @@ def test_live_and_headless_share_the_common_tool_names(transport):
     assert common <= live_names
     assert common <= headless_names
     assert isinstance(capabilities["tools_diff"], list)
+
+
+def test_live_manifest_definitions_are_detached_from_global_schema():
+    from backend.app.engine.mcp_router import MCP_LIVE_TOOLS, _live_tool_definitions
+
+    original = json.dumps(MCP_LIVE_TOOLS, ensure_ascii=False, sort_keys=True)
+    definitions = _live_tool_definitions()
+    definitions[0]["description"] = "mutated in a caller"
+    definitions[0]["inputSchema"].setdefault("properties", {})["caller_field"] = {"type": "string"}
+
+    assert json.dumps(MCP_LIVE_TOOLS, ensure_ascii=False, sort_keys=True) == original
+    assert "caller_field" not in _live_tool_definitions()[0]["inputSchema"].get("properties", {})

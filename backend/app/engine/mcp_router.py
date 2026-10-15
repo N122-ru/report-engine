@@ -6,7 +6,6 @@ Remote agents connect to the user's session using the MCP SSE transport.
 import sys
 import os
 import io
-import copy
 import json
 import re
 import time
@@ -33,6 +32,14 @@ from .block_editor import blocks, edit_block, move_figure
 from .profile import load_profile_input, profile_metadata
 from .image_input import IMAGE_SOURCE_SCHEMA, load_image_input, validate_image_data
 from .mcp_batch import BATCH_SCHEMA, resolve_batch_arguments, validate_batch_calls
+from .mcp_manifest import (
+    MCP_MUTATING_TOOLS,
+    MCP_OPERATION_TOOLS,
+    live_tool_definitions,
+    mcp_tools_page,
+    ordered_mcp_tools,
+    with_unified_mutation_fields,
+)
 from .report_safety import (
     REVISION_FIELDS, add_content_guards, conflict_payload, is_conflict_message,
     operation_fingerprint, report_digest, require_revision_guard, validate_detail, with_snapshot,
@@ -548,167 +555,23 @@ MCP_LIVE_TOOLS = [
     },
 ]
 
-MCP_TOOL_PAGE_SIZE = 10
-MCP_TOOL_CURSOR_PREFIX = "report-live-tools-v1:"
-
-# Keep the complete legacy workflow on the first page. Older clients that do
-# not follow nextCursor still retain enough tools to create and validate a
-# report; newer clients discover the advanced editors on later pages.
-MCP_CORE_TOOL_NAMES = (
-    "list_images",
-    "get_image",
-    "get_images",
-    "upload_image",
-    "get_report_state",
-    "append_or_update_section",
-    "lint_report",
-    "autofix_typography",
-    "update_meta",
-    "delete_image",
-)
-
-MCP_MUTATING_TOOLS = frozenset({
-    "upload_image",
-    "upload_images",
-    "update_image_layout",
-    "append_or_update_section",
-    "patch_text",
-    "apply_patches",
-    "replace_block",
-    "delete_block",
-    "move_figure",
-    "rollback_last_edit",
-    "autofix_typography",
-    "update_meta",
-    "import_profile",
-    "delete_image",
-    "delete_images",
-    "export_report",
-})
-MCP_OPERATION_TOOLS = MCP_MUTATING_TOOLS | {"get_images"}
-
-
-def _with_unified_mutation_fields(
-    tools: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    """Return an isolated manifest with additive mutation arguments."""
-    fields = {
-        "expected_snapshot_id": {
-            "type": "string",
-            "description": "Атомарная snapshot_id из get_report_state; заменяет отдельные expected_*",
-        },
-        "operation_id": {
-            "type": "string",
-            "maxLength": 128,
-            "description": "Необязательный ключ идемпотентности для безопасного повтора операции",
-        },
-    }
-    result = copy.deepcopy(tools)
-    for tool in result:
-        if tool["name"] not in MCP_MUTATING_TOOLS and tool["name"] not in {"batch", "get_images"}:
-            continue
-        properties = tool["inputSchema"].setdefault("properties", {})
-        properties.update(copy.deepcopy(fields))
-    return result
-
-
-MCP_LIVE_TOOLS = _with_unified_mutation_fields(MCP_LIVE_TOOLS)
-
-# Live tools whose schemas advertise optional server-local file sources.
-_LOCAL_FILE_TOOL_NAMES = {"upload_image", "upload_images", "import_profile"}
-
-# Base64-only descriptions for deployments where file_path is not readable.
-_NETWORKED_TOOL_DESCRIPTIONS = {
-    "upload_image": (
-        "Загружает изображение (график matplotlib, схему) в сессию отчета. "
-        "Изображение отображается в браузере в панели медиа и на страницах макета А4. "
-        "Принимает имя файла и данные base64. Опционально может сразу вставить ссылку в Markdown."
-    ),
-    "upload_images": (
-        "Атомарно загружает несколько рисунков из base64_data и при необходимости вставляет "
-        "их после блоков из текущего outline."
-    ),
-    "import_profile": (
-        "Импортирует профиль дисциплины и титульного листа формата report-engine-profile версии 1. "
-        "Принимает JSON-объект profile. Требует свежую meta_revision."
-    ),
-}
-
-
-def _require_base64_source(schema: Dict[str, Any]) -> None:
-    """Make base64_data mandatory in an image schema that no longer offers file_path."""
-    schema.pop("oneOf", None)
-    required = [field for field in schema.get("required", []) if field != "file_path"]
-    if "base64_data" not in required:
-        required.append("base64_data")
-    schema["required"] = required
-
-
-def _without_file_path(tool: Dict[str, Any]) -> Dict[str, Any]:
-    """Copy one live tool without any trace of the server-local file source."""
-    copy_of_tool = copy.deepcopy(tool)
-    copy_of_tool["description"] = _NETWORKED_TOOL_DESCRIPTIONS[tool["name"]]
-    schema = copy_of_tool["inputSchema"]
-    schema["properties"].pop("file_path", None)
-    if tool["name"] == "import_profile":
-        schema["required"] = ["profile"]
-        return copy_of_tool
-    if tool["name"] == "upload_images":
-        item = schema["properties"]["images"]["items"]
-        item["properties"].pop("file_path", None)
-        _require_base64_source(item)
-    else:
-        _require_base64_source(schema)
-    return copy_of_tool
+MCP_LIVE_TOOLS = with_unified_mutation_fields(MCP_LIVE_TOOLS)
 
 
 def _live_tool_definitions() -> List[Dict[str, Any]]:
-    """Return live tools whose schemas match this run's file-source policy.
-
-    Networked deployments must not advertise file_path: an agent would
-    otherwise discover, call, and fail on an argument this process refuses
-    to read. Local distributions keep the full schemas.
-    """
-    if local_files_enabled():
-        return copy.deepcopy(MCP_LIVE_TOOLS)
-    return [
-        _without_file_path(tool) if tool["name"] in _LOCAL_FILE_TOOL_NAMES else copy.deepcopy(tool)
-        for tool in MCP_LIVE_TOOLS
-    ]
+    """Return the live manifest for the current file-source policy."""
+    return live_tool_definitions(MCP_LIVE_TOOLS)
 
 
 def _ordered_mcp_tools() -> List[Dict[str, Any]]:
     """Return a stable discovery order with the compatible core first."""
-    tools = _live_tool_definitions()
-    by_name = {tool["name"]: tool for tool in tools}
-    core = [by_name[name] for name in MCP_CORE_TOOL_NAMES]
-    advanced = [tool for tool in tools if tool["name"] not in MCP_CORE_TOOL_NAMES]
-    return core + advanced
+    return ordered_mcp_tools(MCP_LIVE_TOOLS)
 
 
 def _mcp_tools_page(cursor: Any) -> Dict[str, Any]:
-    """Build one paginated tools/list result using an opaque cursor."""
-    offset = 0
-    if cursor not in (None, ""):
-        if not isinstance(cursor, str) or not cursor.startswith(MCP_TOOL_CURSOR_PREFIX):
-            raise ValueError("Некорректный cursor для tools/list")
-        raw_offset = cursor[len(MCP_TOOL_CURSOR_PREFIX):]
-        if not raw_offset.isdigit():
-            raise ValueError("Некорректный cursor для tools/list")
-        offset = int(raw_offset)
+    """Build one paginated tools/list result for this live manifest."""
+    return mcp_tools_page(cursor, MCP_LIVE_TOOLS)
 
-    tools = _ordered_mcp_tools()
-    if offset < 0 or offset > len(tools):
-        raise ValueError("Cursor tools/list указывает за пределы списка инструментов")
-
-    end = min(offset + MCP_TOOL_PAGE_SIZE, len(tools))
-    result: Dict[str, Any] = {"tools": tools[offset:end]}
-    if end < len(tools):
-        result["nextCursor"] = f"{MCP_TOOL_CURSOR_PREFIX}{end}"
-    return result
-
-
-# ==============================================================================
 # Tool handlers operate on the selected user session.
 # ==============================================================================
 

@@ -245,6 +245,51 @@ def test_confirmation_is_not_sticky_and_stale_revisions_fail(transport):
     assert error and "верси" in result.lower()
 
 
+@pytest.mark.parametrize("include_file_path", [False, True])
+def test_agent_onboarding_skips_questionnaire_and_keeps_one_shot_exit(include_file_path):
+    from backend.app.engine.agent_resources import agent_onboarding_prompt
+
+    text = agent_onboarding_prompt("TestClient", include_file_path=include_file_path)
+
+    assert "максимум один короткий вопрос" in text.lower()
+    assert "только если" in text.lower()
+    assert "работа с этим сервером разовая или постоянная?" in text
+    assert "постоянная или неизвестно" in text.lower()
+    assert "без дополнительных вопросов" in text
+    assert "Если задача one-shot, памятку вовсе не создавай" in text
+    assert "заверши onboarding" in text
+    for obsolete in ("4 вопроса", "Кто вы", "Где лежат исходники", "субагент", "после ответов пользователя"):
+        assert obsolete not in text
+
+
+@pytest.mark.parametrize("include_file_path", [False, True])
+def test_agent_onboarding_teaches_and_maintains_client_optimizations(include_file_path):
+    from backend.app.engine.agent_resources import agent_onboarding_prompt
+
+    text = agent_onboarding_prompt("TestClient", include_file_path=include_file_path)
+    assert "### Клиентские оптимизации\n" in text
+    optimizations = text.split("### Клиентские оптимизации\n", 1)[1].split("### Правило приоритета", 1)[0]
+
+    assert "чеклиста окружения и своего опыта" in optimizations
+    assert "file_path" in optimizations
+    assert "на одной машине с сервером" in optimizations
+    assert "standalone" in optimizations
+    assert "get_capabilities" in optimizations
+    assert "base64" in optimizations
+    assert "байты скриптом, не руками" in optimizations
+    assert "Не кодируй большие файлы по памяти частями" in optimizations
+    assert "batch вместо серий" in optimizations
+    assert "digest вместо полного state" in optimizations
+    assert "operation_id на мутациях" in optimizations
+    assert "ядро правил -> правки -> lint_report -> экспорт" in optimizations
+    assert "не использовать X - использовать Y" in optimizations
+    assert "чем кодировать изображения на этой машине, какие пути допустимы" in optimizations
+    assert "После каждой сессии работы с сервером дополняй" in optimizations
+    assert "что сработало, что сломалось" in optimizations
+    assert "не трогая серверный manifest-блок" in optimizations
+    assert "Клиентские шорткаты" not in text
+
+
 @pytest.mark.anyio
 async def test_layered_resources_and_core_prompt_in_both_transports(transport):
     from pathlib import Path
@@ -256,6 +301,9 @@ async def test_layered_resources_and_core_prompt_in_both_transports(transport):
     name, _, _, _, report, client, token = transport
     core = Path("assets/SKILL.md").read_text(encoding="utf-8").strip()
     assert "agent_onboarding" in core
+    assert "Клиентские оптимизации" in core
+    assert "после каждой сессии" in core
+    assert "задай его вопросы" not in core
     expected = {f"report://reference/{name}": Path(f"assets/reference/{name}.md").read_text(encoding="utf-8").strip()
                 for name in ("figures", "formulas", "tables", "style", "literals")}
 
@@ -265,6 +313,9 @@ async def test_layered_resources_and_core_prompt_in_both_transports(transport):
         assert "agent_onboarding" in instructions
         assert "report://rules/gost732" in instructions
         assert "one-shot" in instructions
+        assert "Клиентские оптимизации" in instructions
+        assert "после каждой сессии" in instructions
+        assert "Задай пользователю вопросы" not in instructions
 
     async def verify(request):
         resources = await request("resources/list", {})
@@ -288,10 +339,9 @@ async def test_layered_resources_and_core_prompt_in_both_transports(transport):
         })
         onboarding_text = onboarding["messages"][0]["content"]["text"]
         assert "Hermes" in onboarding_text
-        assert "где лежат исходники и фотографии" in onboarding_text.lower()
-        assert "независимая проверка" in onboarding_text
-        assert "одноразовый" in onboarding_text.lower()
-        assert "интерактивный" in onboarding_text.lower()
+        assert "максимум один короткий вопрос" in onboarding_text.lower()
+        assert "4 вопроса" not in onboarding_text
+        assert "Локальный профиль клиента" in onboarding_text
         assert "READ-ONLY" in onboarding_text
         assert "get_capabilities" in onboarding_text
         assert "transport" in onboarding_text
@@ -305,7 +355,7 @@ async def test_layered_resources_and_core_prompt_in_both_transports(transport):
         assert "contract_version:" in onboarding_text
         assert "sha256:" in onboarding_text
         assert "created_at:" in onboarding_text
-        assert "### Клиентские шорткаты" in onboarding_text
+        assert "### Клиентские оптимизации" in onboarding_text
         assert "серверный блок заменяется целиком" in onboarding_text.lower()
         assert "памятку вовсе не создавай" in onboarding_text.lower()
         assert "report://rules/gost732" in onboarding_text
@@ -314,6 +364,8 @@ async def test_layered_resources_and_core_prompt_in_both_transports(transport):
         assert "локальный скилл — кэш: сверяй версии с get_capabilities" in onboarding_text
         assert "не хранит" in onboarding_text
         assert "file_path" in onboarding_text
+        assert "base64" in onboarding_text
+        assert "После каждой сессии работы с сервером дополняй" in onboarding_text
 
     if name == "live":
         initialized = client.post(f"/api/mcp/messages?token={token}", json={

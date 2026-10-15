@@ -70,8 +70,10 @@ standards compliance or institution-specific requirements.
   `formulas`, `tables`, `style`, and `literals` (files in `assets/reference/`).
   Agents ask users about uncertain/missing facts outside report prose, never insert
   uncertainty placeholders or silently alter numbers, IP addresses, hashes, or identifiers.
-  Both MCP transports expose `agent_onboarding`; it asks the client agent to question
-  the user natively and returns a local Markdown skill template without server storage.
+  Both MCP transports expose `agent_onboarding`; the agent studies its environment
+  without a questionnaire and maintains a local client-optimization playbook without
+  server storage. At most one short question may clarify one-shot versus ongoing use;
+  one-shot skips the playbook, while ongoing or unknown use proceeds without more questions.
 
 ### Additive MCP Safety Contract (1.1)
 
@@ -137,7 +139,10 @@ standards compliance or institution-specific requirements.
   clients use it to validate cached local instructions.
 - `agent_onboarding` accepts required `client_agent` and optional `notes` arguments.
   Its template prioritizes `report://rules/gost732`, then `report://reference/*`, then
-  client shortcuts; a local skill is a cache and cannot override server rules.
+  client optimizations; a local skill is a cache and cannot override server rules.
+  The environment checklist and server manifest remain separate from client experience.
+  After each server session, the agent appends successes/failures to the client
+  optimizations without changing the manifest block.
 
 ## Headless MCP and Portable Profiles
 

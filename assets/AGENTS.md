@@ -18,7 +18,7 @@ Own shared runtime assets that are consumed by the backend, frontend, or report 
 - Document profile import (`import_profile`, format discriminator, version, and revision precondition) in `SKILL.md` whenever that tool contract changes.
 - Keep batch ordering/error behavior, server-local image paths, image limits, and live/headless upload revision and partial-success differences visible in `SKILL.md`.
 - Keep the unified snapshot, operation-id, and bounded batch-reference rules visible in `SKILL.md` when their MCP behavior changes.
-- Keep the `agent_onboarding` local-cache workflow and the `get_capabilities` resource-version check visible in `SKILL.md` when onboarding or resource contracts change.
+- Keep the questionnaire-free `agent_onboarding` local-cache workflow and the `get_capabilities` resource-version check visible in `SKILL.md`: one-shot skips the playbook; ongoing or unknown use maintains client optimizations after every session without changing the server manifest.
 - Do not add credentials, personal data, generated reports, or temporary files to this directory.
 - Internal instructions and metadata are written in English; text intended for report users remains Russian.
 

@@ -622,6 +622,10 @@ def test_linter_duplicate_numbers():
     res = lint_docx_document(buf)
     numbering = [w for w in res.warnings if w.type == "NUMBERING"]
     assert len(numbering) == 2
+    assert [warning.message for warning in numbering] == [
+        "Дублирующийся номер подписи: «Рисунок 1» встречается 2 раза. Проверьте нумерацию иллюстраций.",
+        "Дублирующийся номер подписи: «Таблица 2» встречается 2 раза. Проверьте нумерацию таблиц.",
+    ]
 
 
 def test_multiline_math_with_outside_number():

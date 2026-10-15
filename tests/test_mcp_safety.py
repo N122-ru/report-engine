@@ -615,7 +615,23 @@ def test_headless_export_response_contains_all_revisions(tmp_path):
     }
 
 
-def test_operation_id_retries_are_cached_without_reapplying(transport):
+def test_operation_id_retries_are_cached_without_reapplying(transport, monkeypatch):
+    from backend.app.engine import report_safety
+    from app.engine import report_safety as live_report_safety
+    if transport[0] == "headless":
+        from backend.app import headless as dispatch_module
+    else:
+        from app.engine import mcp_router as dispatch_module
+
+    fingerprints = []
+    for module in {report_safety, live_report_safety, dispatch_module}:
+        original_fingerprint = module.operation_fingerprint
+
+        def count_fingerprint(*args, _original=original_fingerprint, **kwargs):
+            fingerprints.append(None)
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(module, "operation_fingerprint", count_fingerprint)
     _, call, _, _, _, _, _ = transport
     _, state = call("get_report_state")
     if transport[0] == "headless":
@@ -632,6 +648,7 @@ def test_operation_id_retries_are_cached_without_reapplying(transport):
     assert second == first
     _, after_retry = call("get_report_state")
     assert after_retry["snapshot_id"] == after_first["snapshot_id"]
+    assert len(fingerprints) == 2
     if transport[0] == "headless":
         different = {"fields": {"work_theme": "Другая тема"}, **{
             key: arguments[key] for key in ("operation_id",)

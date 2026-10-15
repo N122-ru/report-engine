@@ -21,7 +21,9 @@ from .engine.agent_resources import (
     agent_onboarding_prompt, get_capabilities, initialize_instructions, read_agent_asset,
     read_reference, reference_resources,
 )
-from .engine.report_safety import conflict_payload, is_conflict_message, require_revision_guard
+from .engine.report_safety import (
+    conflict_payload, is_conflict_message, operation_fingerprint, require_revision_guard,
+)
 from .version import APP_VERSION
 
 
@@ -300,16 +302,18 @@ def _dispatch_tool(report: HeadlessReport, name: str, args: dict[str, Any]) -> t
             if is_conflict_message(message):
                 return _text_result(conflict_payload(message, report._revisions()), is_error=True)
             return _text_result(message, is_error=True)
+    fingerprint = None
     if is_mutating and operation_id is not None:
+        fingerprint = operation_fingerprint(args, name)
         try:
-            cached = report.operation_cache.lookup(operation_id, args, name)
+            cached = report.operation_cache.lookup(operation_id, args, name, fingerprint=fingerprint)
         except (TypeError, ValueError) as exc:
             return _text_result(str(exc), is_error=True)
         if cached is not None:
             return cached
     result = _dispatch_tool_uncached(report, name, args)
     if is_mutating and operation_id is not None and not result.is_error:
-        report.operation_cache.store(operation_id, args, result, name)
+        report.operation_cache.store(operation_id, args, result, name, fingerprint=fingerprint)
     return result
 
 

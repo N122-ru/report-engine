@@ -203,12 +203,14 @@ class OperationCache:
             raise ValueError(f"Параметр «operation_id» не может быть длиннее {MAX_OPERATION_ID_LENGTH} символов")
         return operation_id
 
-    def lookup(self, operation_id: Any, arguments: dict[str, Any], operation_name: str = "") -> Any:
-        """Return a cached result, or ``None`` when the operation is new."""
+    def lookup(self, operation_id: Any, arguments: dict[str, Any], operation_name: str = "",
+               *, fingerprint: str | None = None) -> Any:
+        """Return a cached result, reusing a precomputed fingerprint when supplied."""
         if operation_id is None:
             return None
         operation_id = self._validate_id(operation_id)
-        fingerprint = operation_fingerprint(arguments, operation_name)
+        if fingerprint is None:
+            fingerprint = operation_fingerprint(arguments, operation_name)
         entry = self._entries.get(operation_id)
         if entry is None:
             return None
@@ -219,8 +221,8 @@ class OperationCache:
         return deepcopy(result)
 
     def store(self, operation_id: Any, arguments: dict[str, Any], result: Any,
-              operation_name: str = "") -> dict[str, Any] | None:
-        """Store one successful operation and evict the least recently used item."""
+              operation_name: str = "", *, fingerprint: str | None = None) -> dict[str, Any] | None:
+        """Store one successful operation, reusing a precomputed fingerprint when supplied."""
         if operation_id is None:
             return
         operation_id = self._validate_id(operation_id)
@@ -230,7 +232,8 @@ class OperationCache:
             return {"cached": False, "reason": "result_too_large"}
         self._remove(operation_id)
         self._entries[operation_id] = (
-            operation_fingerprint(arguments, operation_name), deepcopy(result), result_size
+            fingerprint if fingerprint is not None else operation_fingerprint(arguments, operation_name),
+            deepcopy(result), result_size,
         )
         self._bytes += result_size
         self._entries.move_to_end(operation_id)

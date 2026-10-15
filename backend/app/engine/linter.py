@@ -1,6 +1,7 @@
 """Audit OpenXML documents for GOST 7.32 and GOST 2.105 compliance."""
 
 import re
+from collections import Counter
 from typing import Dict, List
 from docx import Document
 from docx.oxml.ns import qn
@@ -386,11 +387,12 @@ def lint_docx_document(docx_file_or_stream) -> LinterResult:
 
     # Preserve manual caption numbers; duplicates are author errors,
     # not generator numbering errors.
-    for dup_num in sorted({n for n in figures_found if figures_found.count(n) > 1}):
+    figure_counts = Counter(figures_found)
+    for dup_num in sorted(num for num, count in figure_counts.items() if count > 1):
         warnings.append(LinterIssue(
             type="NUMBERING",
             severity="WARNING",
-            message=f"Дублирующийся номер подписи: «Рисунок {dup_num}» встречается {figures_found.count(dup_num)} раза. Проверьте нумерацию иллюстраций.",
+            message=f"Дублирующийся номер подписи: «Рисунок {dup_num}» встречается {figure_counts[dup_num]} раза. Проверьте нумерацию иллюстраций.",
             location=f"Рисунок {dup_num}",
             fix_suggestion="Пронумеруйте иллюстрации по порядку без повторов"
         ))
@@ -411,11 +413,12 @@ def lint_docx_document(docx_file_or_stream) -> LinterResult:
                 fix_suggestion="Проверьте, не потерян ли рисунок, либо уточните нумерацию"
             ))
 
-    for dup_num in sorted({n for n in tables_found if tables_found.count(n) > 1}):
+    table_counts = Counter(tables_found)
+    for dup_num in sorted(num for num, count in table_counts.items() if count > 1):
         warnings.append(LinterIssue(
             type="NUMBERING",
             severity="WARNING",
-            message=f"Дублирующийся номер подписи: «Таблица {dup_num}» встречается {tables_found.count(dup_num)} раза. Проверьте нумерацию таблиц.",
+            message=f"Дублирующийся номер подписи: «Таблица {dup_num}» встречается {table_counts[dup_num]} раза. Проверьте нумерацию таблиц.",
             location=f"Таблица {dup_num}",
             fix_suggestion="Пронумеруйте таблицы по порядку без повторов"
         ))

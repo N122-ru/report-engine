@@ -35,7 +35,7 @@ from .image_input import IMAGE_SOURCE_SCHEMA, load_image_input, validate_image_d
 from .mcp_batch import BATCH_SCHEMA, resolve_batch_arguments, validate_batch_calls
 from .report_safety import (
     REVISION_FIELDS, add_content_guards, conflict_payload, is_conflict_message,
-    report_digest, require_revision_guard, validate_detail, with_snapshot,
+    operation_fingerprint, report_digest, require_revision_guard, validate_detail, with_snapshot,
 )
 from .agent_resources import (
     agent_onboarding_prompt, get_capabilities, initialize_instructions,
@@ -1455,14 +1455,16 @@ async def _dispatch_mcp_tool_with_operation(
     operation_id = args.get("operation_id")
     if tool_name == "batch" and args.get("expected_snapshot_id") is not None:
         _check_expected_snapshot(args, session, ())
-    if operation_id is not None and _tool_supports_operation(tool_name, args):
-        cached = session.operation_cache.lookup(operation_id, args, tool_name)
+    supports_operation = operation_id is not None and _tool_supports_operation(tool_name, args)
+    fingerprint = operation_fingerprint(args, tool_name) if supports_operation else None
+    if supports_operation:
+        cached = session.operation_cache.lookup(operation_id, args, tool_name, fingerprint=fingerprint)
         if cached is not None:
             return cached
     result = await _dispatch_mcp_tool(tool_name, args, session)
     result = _decorate_mutation_result(tool_name, result, session)
-    if operation_id is not None and _tool_supports_operation(tool_name, args):
-        session.operation_cache.store(operation_id, args, result, tool_name)
+    if supports_operation:
+        session.operation_cache.store(operation_id, args, result, tool_name, fingerprint=fingerprint)
     return result
 
 

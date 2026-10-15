@@ -10,6 +10,7 @@ export interface PreviewLinterStatus {
   errors: string[];
   warnings: string[];
   metrics: {
+    margins: { left: number; right: number; top: number; bottom: number };
     estPages: number;
     figuresCount: number;
     tablesCount: number;
@@ -242,6 +243,7 @@ export function useLinterStatus(
     }
 
     const knownNames = images.map(file => file.name);
+    const missingImageSources: string[] = [];
     const seenImageSources = new Set<string>();
     for (const image of extractMarkdownImageSources(content)) {
       const source = image.src.trim().replace(/^<|>$/g, '');
@@ -250,8 +252,11 @@ export function useLinterStatus(
       if (isExternalImageRef(source)) {
         warnings.push(`Изображение «${source}» нельзя встроить в DOCX/PDF из внешнего или data/blob-источника.`);
       } else if (!resolveImageName(source, knownNames)) {
-        warnings.push(`Изображение «${source}» упомянуто в тексте, но файл не прикреплён: в документ попадёт плейсхолдер вместо рисунка.`);
+        missingImageSources.push(source);
       }
+    }
+    for (const source of missingImageSources) {
+      warnings.push(`Изображение «${source}» упомянуто в тексте, но файл не прикреплён: в документ попадёт плейсхолдер вместо рисунка.`);
     }
     for (const file of images) {
       const used = Array.from(seenImageSources).some(source => {
@@ -303,7 +308,13 @@ export function useLinterStatus(
       isValid: errors.length === 0,
       errors,
       warnings,
-      metrics: { estPages, figuresCount, tablesCount: tableBlocks, listingsCount },
+      metrics: {
+        margins: { left: 30, right: 15, top: 20, bottom: 20 },
+        estPages,
+        figuresCount,
+        tablesCount: tableBlocks,
+        listingsCount,
+      },
     };
   }, [content, meta.references, images]);
 }

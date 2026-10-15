@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useDeferredValue } from 'react';
 import katex from 'katex';
 import { ReportMetadata } from '../types';
 import { normalizeLogoMode } from '../services/profiles';
@@ -292,7 +292,7 @@ function assignCaptionNumber(used: Set<string>, auto: { value: number }, explici
 
 export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
   meta,
-  content,
+  content: sourceContent,
   images,
   onAutofix,
   headingAlignment = meta.heading_alignment || 'center',
@@ -305,6 +305,8 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
   latexMode = meta.latex_mode || 'omml',
   onLatexModeChange
 }) => {
+  // Keep editor keystrokes responsive while the approximate preview catches up.
+  const content = useDeferredValue(sourceContent);
   const [activeTab, setActiveTab] = useState<'preview' | 'linter'>('preview');
   const [zoom, setZoom] = useState<number>(() => {
     if (typeof window !== 'undefined' && window.innerWidth < 768) {

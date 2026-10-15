@@ -253,11 +253,20 @@ export const App: React.FC = () => {
   const syncQueueRef = useRef<Promise<void>>(Promise.resolve());
   const syncRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const syncRetryAttemptRef = useRef(0);
+  const localStorageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useLayoutEffect(() => {
     contentRef.current = content;
     metaRef.current = meta;
     imagesRef.current = images;
   }, [content, meta, images]);
+  const persistLocalState = useCallback(() => {
+    try {
+      localStorage.setItem(REPORT_META_KEY, JSON.stringify(metaRef.current));
+      localStorage.setItem(REPORT_CONTENT_KEY, contentRef.current);
+    } catch (error) {
+      console.warn("Failed to save report state to localStorage:", error);
+    }
+  }, []);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimerRef = React.useRef<any>(null);
   const insertIntoEditorRef = useRef<((text: string) => void) | null>(null);
@@ -348,27 +357,27 @@ export const App: React.FC = () => {
       saveActiveSubjectId(nextId);
       if (nextId) {
         handleSwitchSubject(nextId);
-      }
+      };
     }
     showToast(`Шаблон «${name}» удалён`);
   };
 
-  // Autosave with neutral localStorage keys and quota-failure handling.
+  // Debounce synchronous storage writes so typing does not block on serialization.
   useEffect(() => {
-    try {
-      localStorage.setItem(REPORT_META_KEY, JSON.stringify(meta));
-    } catch (e) {
-      console.warn("Failed to save metadata to localStorage:", e);
-    }
-  }, [meta]);
+    if (localStorageTimerRef.current) clearTimeout(localStorageTimerRef.current);
+    localStorageTimerRef.current = setTimeout(persistLocalState, 300);
+    return () => {
+      if (localStorageTimerRef.current) {
+        clearTimeout(localStorageTimerRef.current);
+        localStorageTimerRef.current = null;
+      }
+    };
+  }, [content, meta, persistLocalState]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(REPORT_CONTENT_KEY, content);
-    } catch (e) {
-      console.warn("Failed to save report text to localStorage:", e);
-    }
-  }, [content]);
+    window.addEventListener('pagehide', persistLocalState);
+    return () => window.removeEventListener('pagehide', persistLocalState);
+  }, [persistLocalState]);
 
   useEffect(() => {
     let active = true;
@@ -402,6 +411,7 @@ export const App: React.FC = () => {
     return () => {
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
       if (syncRetryTimerRef.current) clearTimeout(syncRetryTimerRef.current);
+      if (localStorageTimerRef.current) clearTimeout(localStorageTimerRef.current);
     };
   }, []);
 

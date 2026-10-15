@@ -255,8 +255,16 @@ async def test_layered_resources_and_core_prompt_in_both_transports(transport):
 
     name, _, _, _, report, client, token = transport
     core = Path("assets/SKILL.md").read_text(encoding="utf-8").strip()
+    assert "agent_onboarding" in core
     expected = {f"report://reference/{name}": Path(f"assets/reference/{name}.md").read_text(encoding="utf-8").strip()
                 for name in ("figures", "formulas", "tables", "style", "literals")}
+
+    def assert_initialize_instructions(instructions):
+        assert instructions
+        assert len(instructions) <= 800
+        assert "agent_onboarding" in instructions
+        assert "report://rules/gost732" in instructions
+        assert "one-shot" in instructions
 
     async def verify(request):
         resources = await request("resources/list", {})
@@ -284,15 +292,35 @@ async def test_layered_resources_and_core_prompt_in_both_transports(transport):
         assert "независимая проверка" in onboarding_text
         assert "одноразовый" in onboarding_text.lower()
         assert "интерактивный" in onboarding_text.lower()
+        assert "READ-ONLY" in onboarding_text
+        assert "get_capabilities" in onboarding_text
+        assert "transport" in onboarding_text
+        assert "limits" in onboarding_text
+        assert "file_path" in onboarding_text
+        assert "tools_diff" in onboarding_text
+        assert "resources/list" in onboarding_text
+        assert "не пиши памятку" in onboarding_text.lower()
         assert "## Локальная памятка агента" in onboarding_text
+        assert "skill_id: report-engine" in onboarding_text
+        assert "contract_version:" in onboarding_text
+        assert "sha256:" in onboarding_text
+        assert "created_at:" in onboarding_text
+        assert "### Клиентские шорткаты" in onboarding_text
+        assert "серверный блок заменяется целиком" in onboarding_text.lower()
+        assert "памятку вовсе не создавай" in onboarding_text.lower()
         assert "report://rules/gost732" in onboarding_text
         assert "ядро >" in onboarding_text
         assert "не переопределяет серверные правила" in onboarding_text
         assert "локальный скилл — кэш: сверяй версии с get_capabilities" in onboarding_text
         assert "не хранит" in onboarding_text
-        assert ("file_path" in onboarding_text) == (name == "headless")
+        assert "file_path" in onboarding_text
 
     if name == "live":
+        initialized = client.post(f"/api/mcp/messages?token={token}", json={
+            "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {},
+        }).json()
+        assert_initialize_instructions(initialized["result"]["instructions"])
+
         async def request(method, params):
             response = client.post(f"/api/mcp/messages?token={token}", json={
                 "jsonrpc": "2.0", "id": 2, "method": method, "params": params,
@@ -313,7 +341,8 @@ async def test_layered_resources_and_core_prompt_in_both_transports(transport):
                     await server.run(*server_streams, server.create_initialization_options())
                 group.start_soon(run)
                 async with ClientSession(*client_streams) as session:
-                    await session.initialize()
+                    initialized = await session.initialize()
+                    assert_initialize_instructions(initialized.instructions)
                     async def request(method, params):
                         if method == "resources/list":
                             result = await session.list_resources()

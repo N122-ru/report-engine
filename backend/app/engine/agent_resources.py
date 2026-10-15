@@ -10,6 +10,7 @@ from .pdf_converter import pdf_export_status
 from .report_safety import MAX_MARKDOWN_BYTES
 
 REFERENCE_NAMES = ("figures", "formulas", "tables", "style", "literals")
+CORE_RESOURCE_URI = "report://rules/gost732"
 CONTRACT_VERSION = "1.3"
 LIVE_TOOL_NAMES = frozenset({
     "batch", "list_images", "get_image", "get_images", "upload_image", "upload_images",
@@ -58,7 +59,7 @@ def read_reference(uri: str) -> str:
 
 def resource_versions() -> list[dict[str, str | int]]:
     """Return hashes and byte sizes for every cacheable agent resource."""
-    resources = [("report://rules/gost732", "SKILL.md")]
+    resources = [(CORE_RESOURCE_URI, "SKILL.md")]
     resources.extend(
         (f"report://reference/{name}", f"reference/{name}.md")
         for name in REFERENCE_NAMES
@@ -72,6 +73,23 @@ def resource_versions() -> list[dict[str, str | int]]:
             "bytes": len(content),
         })
     return result
+
+
+def initialize_instructions() -> str:
+    """Build the short Russian onboarding contract advertised during initialize."""
+    references = ", ".join(resource["uri"] for resource in reference_resources())
+    return "\n".join((
+        "Если работа с сервером не одноразовая (one-shot — памятка не нужна) и локальной памятки нет, "
+        "вызови промпт agent_onboarding.",
+        "Задай пользователю вопросы промпта и сохрани памятку в своей системе скиллов "
+        "(например, ~/.hermes/skills); сервер её не хранит.",
+        f"Ядро правил: {CORE_RESOURCE_URI}.",
+        f"Справочники: {references}.",
+        "Перед экспортом обязательно вызови lint_report.",
+        "Актуальность памятки сверяй по resources[] из get_capabilities.",
+        "Если хэши совпадают, памятку не пересоздавай.",
+        "Не выдумывай возможности, которых нет в ответах сервера.",
+    ))
 
 
 def agent_onboarding_prompt(
@@ -99,10 +117,29 @@ def agent_onboarding_prompt(
         "2. Где лежат исходники и фотографии, которые можно использовать?\n"
         "3. Нужна ли финальная независимая проверка субагентом?\n"
         "4. Нужен одноразовый (one-shot) сценарий или интерактивный режим?\n"
-        "После ответов подставь их в следующую локальную памятку. Не добавляй в неё "
-        "неподтверждённые сведения; сервер её не хранит.\n"
+        "Перед записью выполни только READ-ONLY чеклист:\n"
+        "1. Вызови get_capabilities и изучи transport, limits, file_path и tools_diff.\n"
+        "2. Получи список доступных справочников из resources/list.\n"
+        f"3. Прочитай ядро {CORE_RESOURCE_URI}.\n"
+        "Не пиши памятку до завершения чеклиста и не додумывай возможности, "
+        "которых нет в ответах сервера.\n"
+        "Если задача one-shot, памятку вовсе не создавай. Иначе после ответов пользователя "
+        "сохрани её локально в своей системе скиллов; сервер её не хранит.\n"
         f"{note_block}\n"
         "## Локальная памятка агента\n"
+        "### Серверный manifest (обновляется сервером)\n"
+        "```yaml\n"
+        "skill_id: report-engine\n"
+        "contract_version: [из get_capabilities]\n"
+        "resources:\n"
+        f"  - uri: {CORE_RESOURCE_URI}\n"
+        "    sha256: [фактический хэш из get_capabilities]\n"
+        "  - uri: report://reference/*\n"
+        "    sha256: [фактические хэши из get_capabilities]\n"
+        "created_at: [UTC-время создания]\n"
+        "```\n"
+        "При обновлении памятки серверный блок заменяется целиком, "
+        "а раздел «Клиентские шорткаты» сохраняется.\n\n"
         "### Назначение MCP у этого пользователя\n"
         "[Кратко опиши назначение MCP на основе ответов пользователя.]\n\n"
         "### Клиентские шорткаты\n"
@@ -111,7 +148,7 @@ def agent_onboarding_prompt(
         f"{file_path_shortcut}"
         "- Передавай operation_id на мутациях от слабых клиентов.\n\n"
         "### Правило приоритета источников\n"
-        "report://rules/gost732 ядро > report://reference/* > локальные шорткаты; "
+        f"{CORE_RESOURCE_URI} ядро > report://reference/* > локальные шорткаты; "
         "локальный скилл не переопределяет серверные правила.\n"
         "локальный скилл — кэш: сверяй версии с get_capabilities"
     )

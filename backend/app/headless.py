@@ -18,8 +18,8 @@ from .engine.mcp_batch import BATCH_SCHEMA, resolve_batch_arguments, validate_ba
 from .engine.pdf_converter import pdf_export_enabled
 from .engine.profile import load_profile_input
 from .engine.agent_resources import (
-    agent_onboarding_prompt, get_capabilities, read_agent_asset, read_reference,
-    reference_resources,
+    agent_onboarding_prompt, get_capabilities, initialize_instructions, read_agent_asset,
+    read_reference, reference_resources,
 )
 from .engine.report_safety import conflict_payload, is_conflict_message, require_revision_guard
 from .version import APP_VERSION
@@ -581,7 +581,7 @@ def _make_server(report: HeadlessReport) -> Server:
     return Server(
         "report-engine-headless",
         version=SERVER_VERSION,
-        instructions="Локальный MCP-сервер Report Engine. Состояние живёт только в RAM до остановки процесса.",
+        instructions=initialize_instructions(),
         on_list_tools=list_tools,
         on_call_tool=call_tool,
         on_list_resources=list_resources,

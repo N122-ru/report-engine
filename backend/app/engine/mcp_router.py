@@ -37,8 +37,8 @@ from .report_safety import (
     report_digest, require_revision_guard, validate_detail, with_snapshot,
 )
 from .agent_resources import (
-    agent_onboarding_prompt, get_capabilities, live_file_root, read_agent_asset, read_reference,
-    reference_resources,
+    agent_onboarding_prompt, get_capabilities, initialize_instructions, live_file_root,
+    read_agent_asset, read_reference, reference_resources,
 )
 from .pdf_converter import convert_docx_to_pdf
 from .security import PDF_SEMAPHORE
@@ -1719,20 +1719,7 @@ async def mcp_post_message(
                     "version": APP_VERSION,
                     "sessionToken": session.token
                 },
-                "instructions": (
-                    "Сервер Report Engine (ГОСТ 7.32-2017, ГОСТ 2.105-2019).\n"
-                    "Сначала прочитай канонические правила в ресурсе report://rules/gost732. "
-                    "Для нового отчёта собери черновик локально и используй пакетные операции; "
-                    "для существующего отчёта применяй точечные правки. После записи используй "
-                    "возвращённые revision, meta_revision и image_revision. "
-                    "tools/list может возвращать nextCursor — прочитай все страницы discovery. "
-                    "Для переноса настроек используй import_profile с объектом report-engine-profile "
-                    "версии 1 и свежей meta_revision. "
-                    "Независимые чтения можно отправлять отдельными параллельными вызовами, "
-                    "но записи с ревизиями выполняй последовательно. "
-                    "Не выдумывай факты и не сохраняй дополнительные skills без отдельной просьбы пользователя. "
-                    "Токен сессии протухает — при обрыве попроси свежий URL."
-                )
+                "instructions": initialize_instructions()
             }
         }
 

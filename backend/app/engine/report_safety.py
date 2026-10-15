@@ -18,6 +18,7 @@ OPERATION_RESULT_MAX_BYTES = 256 * 1024
 MAX_OPERATION_ID_LENGTH = 128
 BLOCKING_KINDS = frozenset({"placeholder", "missing_image"})
 REVISION_FIELDS = ("revision", "meta_revision", "image_revision")
+LARGE_FINGERPRINT_FIELDS = frozenset({"base64_data", "data"})
 GUARDS = (
     ("placeholder", re.compile(
         r"\b(?:данных|информации|сведений|результатов)\s+(?:нет|недостаточно)\b|"
@@ -164,8 +165,23 @@ def require_revision_guard(
 
 
 def operation_fingerprint(arguments: dict[str, Any], operation_name: str = "") -> str:
-    """Hash operation arguments while excluding the id used for deduplication."""
-    payload = {key: value for key, value in arguments.items() if key != "operation_id"}
+    """Hash operation arguments without serializing large binary payloads twice."""
+
+    def compact(value: Any, key: str | None = None) -> Any:
+        if isinstance(value, bytes):
+            return {"__sha256__": hashlib.sha256(value).hexdigest(), "__length__": len(value)}
+        if isinstance(value, str) and key in LARGE_FINGERPRINT_FIELDS:
+            return {
+                "__sha256__": hashlib.sha256(value.encode("utf-8")).hexdigest(),
+                "__length__": len(value),
+            }
+        if isinstance(value, dict):
+            return {name: compact(item, name) for name, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [compact(item) for item in value]
+        return value
+
+    payload = compact({key: value for key, value in arguments.items() if key != "operation_id"})
     if operation_name:
         payload["__operation_name__"] = operation_name
     try:

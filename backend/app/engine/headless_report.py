@@ -53,6 +53,7 @@ class HeadlessReport:
         self.image_hashes: dict[str, str] = {}
         self.verification = ReportVerification()
         self.operation_cache = OperationCache()
+        self._revision_cache: dict[str, str] | None = None
 
     def _require_report(self) -> ReportMetadata:
         if self.metadata is None:
@@ -60,12 +61,19 @@ class HeadlessReport:
         return self.metadata
 
     def _revisions(self) -> dict[str, str]:
+        if self._revision_cache is not None:
+            return with_snapshot(self._revision_cache)
         metadata = self._require_report().model_dump()
-        return with_snapshot({
+        self._revision_cache = {
             "revision": _digest(self.content),
             "meta_revision": _digest(json.dumps(metadata, ensure_ascii=False, sort_keys=True)),
             "image_revision": _digest(json.dumps(self.image_hashes, sort_keys=True)),
-        })
+        }
+        return with_snapshot(self._revision_cache)
+
+    def _invalidate_revisions(self) -> None:
+        """Invalidate cached report revisions after an actual state change."""
+        self._revision_cache = None
 
     @staticmethod
     def _sanitize_filename(filename: str) -> str:
@@ -161,6 +169,7 @@ class HeadlessReport:
         self.images[safe_name] = data
         self.image_hashes[safe_name] = hashlib.sha256(data).hexdigest()
         self.content = next_content
+        self._invalidate_revisions()
         self.verification.changed()
         return safe_name
 
@@ -216,6 +225,7 @@ class HeadlessReport:
             raise ValueError(f"Изображение «{safe_name}» не найдено")
         del self.images[safe_name]
         del self.image_hashes[safe_name]
+        self._invalidate_revisions()
         self.operation_cache.clear()
         self.verification.changed()
         return self._revisions()
@@ -278,6 +288,7 @@ class HeadlessReport:
         if self.metadata is not None:
             raise ValueError("Отчёт уже создан; новый отчёт требует нового процесса")
         self.metadata = self._validate_metadata({} if metadata is None else metadata)
+        self._invalidate_revisions()
         return self.get_report_state()
 
     def get_report_state(self, detail: str = "full") -> dict[str, Any]:
@@ -303,6 +314,7 @@ class HeadlessReport:
         metadata = self._validate_metadata({**self._require_report().model_dump(), **fields})
         if metadata != self.metadata:
             self.verification.changed()
+            self._invalidate_revisions()
         self.metadata = metadata
         return self._revisions()
 
@@ -320,6 +332,7 @@ class HeadlessReport:
         updated = self._validate_metadata(metadata, allow_profile_logo=True)
         if updated != self.metadata:
             self.verification.changed()
+            self._invalidate_revisions()
         self.metadata = updated
         result = self.get_report_state()
         result["profile_subject"] = validated["subject"]
@@ -353,6 +366,7 @@ class HeadlessReport:
         next_content = updated.rstrip() + "\n"
         if next_content != self.content:
             self.verification.changed()
+            self._invalidate_revisions()
         self.content = next_content
         return self._revisions()
 
@@ -380,6 +394,7 @@ class HeadlessReport:
             raise ValueError("Размер текста отчёта превышает 500 КБ")
         if fixed != self.content:
             self.verification.changed()
+            self._invalidate_revisions()
         self.content = fixed
         return self._revisions()
 

@@ -50,6 +50,7 @@ router = APIRouter()
 
 # Active MCP SSE connections map connection IDs to asyncio queues.
 _mcp_connections: Dict[str, asyncio.Queue] = {}
+MCP_TOOL_ERRORS = (ValueError, TypeError, KeyError, OSError, RuntimeError, binascii.Error)
 
 
 def _load_skill_text() -> str:
@@ -587,8 +588,10 @@ MCP_MUTATING_TOOLS = frozenset({
 MCP_OPERATION_TOOLS = MCP_MUTATING_TOOLS | {"get_images"}
 
 
-def _add_unified_mutation_fields() -> None:
-    """Advertise additive snapshot and idempotency arguments on live writes."""
+def _with_unified_mutation_fields(
+    tools: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Return an isolated manifest with additive mutation arguments."""
     fields = {
         "expected_snapshot_id": {
             "type": "string",
@@ -600,14 +603,16 @@ def _add_unified_mutation_fields() -> None:
             "description": "Необязательный ключ идемпотентности для безопасного повтора операции",
         },
     }
-    for tool in MCP_LIVE_TOOLS:
+    result = copy.deepcopy(tools)
+    for tool in result:
         if tool["name"] not in MCP_MUTATING_TOOLS and tool["name"] not in {"batch", "get_images"}:
             continue
         properties = tool["inputSchema"].setdefault("properties", {})
-        properties.update(fields)
+        properties.update(copy.deepcopy(fields))
+    return result
 
 
-_add_unified_mutation_fields()
+MCP_LIVE_TOOLS = _with_unified_mutation_fields(MCP_LIVE_TOOLS)
 
 # Live tools whose schemas advertise optional server-local file sources.
 _LOCAL_FILE_TOOL_NAMES = {"upload_image", "upload_images", "import_profile"}
@@ -665,9 +670,9 @@ def _live_tool_definitions() -> List[Dict[str, Any]]:
     to read. Local distributions keep the full schemas.
     """
     if local_files_enabled():
-        return MCP_LIVE_TOOLS
+        return copy.deepcopy(MCP_LIVE_TOOLS)
     return [
-        _without_file_path(tool) if tool["name"] in _LOCAL_FILE_TOOL_NAMES else tool
+        _without_file_path(tool) if tool["name"] in _LOCAL_FILE_TOOL_NAMES else copy.deepcopy(tool)
         for tool in MCP_LIVE_TOOLS
     ]
 
@@ -810,7 +815,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
                 result = await _dispatch_mcp_tool_with_operation(call["name"], call_args, session)
                 results.append({"name": call["name"], "ok": True, "result": result})
                 previous_results.append(result)
-            except Exception as exc:
+            except MCP_TOOL_ERRORS as exc:
                 detail = (conflict_payload(str(exc), _session_revisions(session))
                           if is_conflict_message(str(exc)) else None)
                 error = detail["error"] if detail else f"Ошибка выполнения {call['name']}: {exc}"
@@ -1095,7 +1100,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         content = args.get("section_content", "").strip()
         mode = args.get("mode", "update_or_append")
         before = session.content
-        revision = hashlib.sha256(before.encode("utf-8")).hexdigest()
+        revision = session.revision
         expected = args.get("expected_revision")
         if args.get("expected_snapshot_id") is not None:
             _check_expected_snapshot(args, session, ("revision",))
@@ -1121,7 +1126,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
             "status": status,
             "message": f"Раздел «{heading}» успешно обновлен в браузере пользователя",
             "full_length": len(new_md),
-            "revision": hashlib.sha256(new_md.encode("utf-8")).hexdigest(),
+            "revision": session.revision,
             "headings_before": before_headings,
             "headings_after": after_headings,
             "diff": diff
@@ -1131,7 +1136,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         find = args.get("find", "")
         replacement = args.get("replace", "")
         before = session.content
-        revision = hashlib.sha256(before.encode("utf-8")).hexdigest()
+        revision = session.revision
         if not find:
             raise ValueError("Не указан find")
         if args.get("expected_snapshot_id") is not None:
@@ -1149,7 +1154,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         await session_manager.update_content(token=session.token, content=new_md, source="mcp_agent")
         return {
             "status": "updated", "replacements": 1,
-            "revision": hashlib.sha256(new_md.encode("utf-8")).hexdigest(), "diff": diff,
+            "revision": session.revision, "diff": diff,
         }
 
     elif tool_name == "apply_patches":
@@ -1790,7 +1795,7 @@ async def mcp_post_message(
 
     try:
         body = await request.json()
-    except Exception:
+    except (json.JSONDecodeError, UnicodeDecodeError):
         raise HTTPException(status_code=400, detail="Невалидный JSON")
 
     req_id = body.get("id")
@@ -2033,7 +2038,7 @@ async def mcp_post_message(
                     "isError": False
                 }
             }
-        except Exception as e:
+        except MCP_TOOL_ERRORS as e:
             message = f"Ошибка выполнения {tool_name}: {str(e)}"
             conflict = None
             if is_conflict_message(str(e)):

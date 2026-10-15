@@ -62,6 +62,7 @@ class SessionData:
         self.edit_history: deque[dict] = deque(maxlen=20)
         self.verification = ReportVerification()
         self.operation_cache = OperationCache()
+        self._revision_cache: dict[str, str] = {}
         # MCP reads may run concurrently, but mutations for one session must
         # observe revisions in order and never overwrite one another.
         self.mcp_write_lock = asyncio.Lock()
@@ -71,23 +72,39 @@ class SessionData:
 
     @property
     def revision(self) -> str:
-        return hashlib.sha256(self.content.encode("utf-8")).hexdigest()
+        cached = self._revision_cache.get("revision")
+        if cached is None:
+            cached = hashlib.sha256(self.content.encode("utf-8")).hexdigest()
+            self._revision_cache["revision"] = cached
+        return cached
 
     @property
     def meta_revision(self) -> str:
-        data = json.dumps(self.meta, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(data.encode("utf-8")).hexdigest()
+        cached = self._revision_cache.get("meta_revision")
+        if cached is None:
+            data = json.dumps(self.meta, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            cached = hashlib.sha256(data.encode("utf-8")).hexdigest()
+            self._revision_cache["meta_revision"] = cached
+        return cached
 
     @property
     def image_revision(self) -> str:
-        data = json.dumps({
-            "images": sorted(
-                (name, self.image_hashes.get(name) or hashlib.sha256(raw).hexdigest())
-                for name, raw in self.images.items()
-            ),
-            "deleted": sorted(self.deleted_images),
-        }, ensure_ascii=False, separators=(",", ":"))
-        return hashlib.sha256(data.encode("utf-8")).hexdigest()
+        cached = self._revision_cache.get("image_revision")
+        if cached is None:
+            data = json.dumps({
+                "images": sorted(
+                    (name, self.image_hashes.get(name) or hashlib.sha256(raw).hexdigest())
+                    for name, raw in self.images.items()
+                ),
+                "deleted": sorted(self.deleted_images),
+            }, ensure_ascii=False, separators=(",", ":"))
+            cached = hashlib.sha256(data.encode("utf-8")).hexdigest()
+            self._revision_cache["image_revision"] = cached
+        return cached
+
+    def _invalidate_revision(self, field: str) -> None:
+        """Drop one cached revision after its corresponding state changes."""
+        self._revision_cache.pop(field, None)
 
     @property
     def snapshot_id(self) -> str:
@@ -111,7 +128,7 @@ class SessionData:
         for q in list(self.listeners):
             try:
                 await q.put(event)
-            except Exception:
+            except (asyncio.QueueFull, RuntimeError):
                 dead.append(q)
         for q in dead:
             self.listeners.discard(q)
@@ -140,6 +157,7 @@ class SessionData:
         self.images[safe_name] = data
         self.image_hashes[safe_name] = hashlib.sha256(data).hexdigest()
         self.deleted_images.discard(safe_name)
+        self._invalidate_revision("image_revision")
         self.verification.changed()
         self.touch()
         return safe_name
@@ -156,6 +174,7 @@ class SessionData:
         if removed:
             self.image_hashes.pop(safe_name, None)
             self.deleted_images.add(safe_name)
+            self._invalidate_revision("image_revision")
             self.operation_cache.clear()
             self.verification.changed()
             self.touch()
@@ -251,22 +270,23 @@ class SessionManager:
         if content == session.content:
             return session
         before = session.content
+        before_revision = session.revision
+        after_revision = hashlib.sha256(content.encode("utf-8")).hexdigest()
         session.edit_history.append({
             "source": source,
             "timestamp": time.time(),
             "before_content": before,
-            "before_revision": session.revision,
-            "after_revision": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            "before_revision": before_revision,
+            "after_revision": after_revision,
             "diff": "".join(difflib.unified_diff(
                 before.splitlines(keepends=True), content.splitlines(keepends=True),
                 fromfile="до", tofile="после"
             )),
         })
         session.content = content
+        session._revision_cache["revision"] = after_revision
         session.verification.changed()
         session.touch()
-        before_revision = hashlib.sha256(before.encode("utf-8")).hexdigest()
-        after_revision = session.revision
         patches = build_content_patches(before, content)
         event = {
             "type": "content_updated",
@@ -298,6 +318,7 @@ class SessionManager:
         before_meta = session.meta
         before_meta_revision = session.meta_revision
         session.meta = meta
+        session._invalidate_revision("meta_revision")
         session.verification.changed()
         session.touch()
         changed = {key: value for key, value in meta.items() if before_meta.get(key) != value}

@@ -6,10 +6,12 @@ according to GOST 7.32-2017 / GOST 2.105-2019.
 
 import os
 import re
+import struct
 from urllib.parse import unquote
 from typing import Dict, Optional, Tuple
 from markdown_it import MarkdownIt
 from docx import Document
+from docx.image.exceptions import InvalidImageStreamError, UnexpectedEndOfFileError, UnrecognizedImageError
 from docx.shared import Pt, Mm, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
@@ -1093,11 +1095,9 @@ def _image_size(image_bytes: bytes):
     """Read pixel dimensions from PNG/JPEG/GIF/BMP headers without Pillow."""
     try:
         if image_bytes[:8] == b"\x89PNG\r\n\x1a\n":
-            import struct
             w, h = struct.unpack(">II", image_bytes[16:24])
             return (w, h)
         if image_bytes[:2] == b"\xff\xd8":
-            import struct
             pos = 2
             while pos < len(image_bytes) - 8:
                 if image_bytes[pos] != 0xFF:
@@ -1112,14 +1112,12 @@ def _image_size(image_bytes: bytes):
                     break
                 pos += 2 + size
         if image_bytes[:6] in (b"GIF87a", b"GIF89a"):
-            import struct
             w, h = struct.unpack("<HH", image_bytes[6:10])
             return (w, h)
         if image_bytes[:2] == b"BM":
-            import struct
             w, h = struct.unpack("<II", image_bytes[18:26])
             return (w, abs(h))
-    except Exception:
+    except (IndexError, struct.error, TypeError, ValueError):
         pass
     return None
 
@@ -1151,7 +1149,16 @@ def _insert_image_or_placeholder(doc, paragraph, src: str, alt: str, images_dict
             else:
                 run.add_picture(io.BytesIO(image_bytes), width=Mm(width_mm))
             inserted = True
-        except Exception:
+        except (
+            IndexError,
+            InvalidImageStreamError,
+            OSError,
+            TypeError,
+            UnexpectedEndOfFileError,
+            UnrecognizedImageError,
+            ValueError,
+            struct.error,
+        ):
             inserted = False
 
     if not inserted:

@@ -21,7 +21,13 @@ from typing import Dict, List, Any, Optional
 from fastapi import APIRouter, Request, Response, HTTPException, Query, Body, UploadFile, File
 from fastapi.responses import StreamingResponse
 
-from .sessions import session_manager, SessionData, MAX_IMAGE_SIZE, MAX_IMAGES_COUNT
+from .sessions import (
+    session_manager,
+    SessionData,
+    MAX_IMAGE_SIZE,
+    MAX_IMAGES_COUNT,
+    validate_session_metadata,
+)
 from .security import MAX_MARKDOWN_SIZE, validate_markdown_size
 from ..models.report import ReportMetadata, GenerateOptions, ImageLayout
 from .generator import build_docx_report
@@ -30,7 +36,12 @@ from .typography import apply_typography_outside_code, strip_trailing_dot
 from .section_editor import edit_section, sections, section_identifier
 from .block_editor import blocks, edit_block, move_figure
 from .profile import load_profile_input, profile_metadata
-from .image_input import IMAGE_SOURCE_SCHEMA, load_image_input, validate_image_data
+from .image_input import (
+    IMAGE_SOURCE_SCHEMA,
+    MAX_BASE64_IMAGE_LENGTH,
+    load_image_input,
+    validate_image_data,
+)
 from .mcp_batch import BATCH_SCHEMA, resolve_batch_arguments, validate_batch_calls
 from .mcp_manifest import (
     MCP_MUTATING_TOOLS,
@@ -69,8 +80,11 @@ def _load_skill_text() -> str:
 
 
 def _decode_image_data(encoded: str, filename: str) -> bytes:
-    if "base64," in encoded[:50]:
+    encoded = encoded.strip()
+    if "base64," in encoded[:64].lower():
         encoded = encoded.split(",", 1)[1]
+    if len(encoded) > MAX_BASE64_IMAGE_LENGTH:
+        raise ValueError(f"Закодированное изображение {filename} превышает лимит {MAX_IMAGE_SIZE // (1024 * 1024)} МБ")
     try:
         data = base64.b64decode(encoded, validate=True)
     except (ValueError, binascii.Error) as exc:
@@ -770,6 +784,12 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
 
         raw_bytes = await _load_validated_image_input(args, filename)
         _check_expected_snapshot(args, session, ("revision",))
+        new_content = session.content
+        if insert_into_report:
+            md_caption = (caption or "Иллюстрация").replace("\n", " ").replace("]", "")
+            safe_name = SessionData.sanitize_filename(filename)
+            new_content = session.content.rstrip() + f"\n\n![{md_caption}]({safe_name})\n"
+            validate_markdown_size(new_content)
         safe_name = session.add_image(filename, raw_bytes)
 
         await session.broadcast({
@@ -785,9 +805,6 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
 
         inserted = False
         if insert_into_report:
-            md_caption = (caption or "Иллюстрация").replace("\n", " ").replace("]", "")
-            img_md = f"\n\n![{md_caption}]({safe_name})\n"
-            new_content = session.content.rstrip() + img_md
             await session_manager.update_content(
                 token=session.token,
                 content=new_content,
@@ -841,6 +858,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
             new_md = left + ("\n\n" if left else "") + "\n\n".join(figures) + ("\n\n" if right else "\n") + right
         if [s.heading for s in sections(new_md)] != [s.heading for s in sections(session.content)]:
             raise ValueError("Вставка рисунков изменила структуру разделов")
+        validate_markdown_size(new_md)
         for name, raw in staged:
             session.add_image(name, raw)
         if new_md != session.content:
@@ -1522,6 +1540,10 @@ async def _sync_session_locked(token: str, payload: dict, session: SessionData):
     if "meta" in payload:
         if not isinstance(payload["meta"], dict):
             raise HTTPException(status_code=422, detail="meta должен быть объектом")
+        try:
+            validate_session_metadata(payload["meta"])
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         expected_meta = payload.get("expected_meta_revision")
         if expected_meta is not None and expected_meta != session.meta_revision and payload["meta"] != session.meta:
             return Response(
@@ -1661,13 +1683,31 @@ async def mcp_post_message(
     except (json.JSONDecodeError, UnicodeDecodeError):
         raise HTTPException(status_code=400, detail="Невалидный JSON")
 
+    if not isinstance(body, dict):
+        return {
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {"code": -32600, "message": "JSON-RPC запрос должен быть объектом"},
+        }
+
     req_id = body.get("id")
     method = body.get("method")
     params = body.get("params", {})
+    if params is None:
+        params = {}
 
     response_payload = None
+    invalid_params = not isinstance(params, dict)
+    if invalid_params:
+        response_payload = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "error": {"code": -32602, "message": "params должен быть объектом"},
+        }
 
-    if method == "initialize":
+    if invalid_params:
+        pass
+    elif method == "initialize":
         response_payload = {
             "jsonrpc": "2.0",
             "id": req_id,
@@ -1885,39 +1925,46 @@ async def mcp_post_message(
         tool_name = params.get("name")
         tool_args = params.get("arguments", {})
 
-        try:
-            result_data = await _dispatch_mcp_tool_safely(tool_name, tool_args, session)
-            if isinstance(result_data, dict) and "__mcp_content__" in result_data:
-                content_payload = result_data["__mcp_content__"]
-            else:
-                content_payload = [
-                    {"type": "text", "text": json.dumps(result_data, ensure_ascii=False, indent=2)}
-                ]
+        if not isinstance(tool_name, str) or not tool_name or not isinstance(tool_args, dict):
             response_payload = {
                 "jsonrpc": "2.0",
                 "id": req_id,
-                "result": {
-                    "content": content_payload,
-                    "isError": False
-                }
+                "error": {"code": -32602, "message": "tools/call требует name и объект arguments"},
             }
-        except MCP_TOOL_ERRORS as e:
-            message = f"Ошибка выполнения {tool_name}: {str(e)}"
-            conflict = None
-            if is_conflict_message(str(e)):
-                conflict = conflict_payload(message, _session_revisions(session))
-            response_payload = {
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {
-                    "content": [
-                        {"type": "text", "text": json.dumps(conflict, ensure_ascii=False)
-                         if conflict else message}
-                    ],
-                    "isError": True,
-                    **({"structuredContent": conflict} if conflict else {}),
+        else:
+            try:
+                result_data = await _dispatch_mcp_tool_safely(tool_name, tool_args, session)
+                if isinstance(result_data, dict) and "__mcp_content__" in result_data:
+                    content_payload = result_data["__mcp_content__"]
+                else:
+                    content_payload = [
+                        {"type": "text", "text": json.dumps(result_data, ensure_ascii=False, indent=2)}
+                    ]
+                response_payload = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {
+                        "content": content_payload,
+                        "isError": False
+                    }
                 }
-            }
+            except MCP_TOOL_ERRORS as e:
+                message = f"Ошибка выполнения {tool_name}: {str(e)}"
+                conflict = None
+                if is_conflict_message(str(e)):
+                    conflict = conflict_payload(message, _session_revisions(session))
+                response_payload = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {
+                        "content": [
+                            {"type": "text", "text": json.dumps(conflict, ensure_ascii=False)
+                             if conflict else message}
+                        ],
+                        "isError": True,
+                        **({"structuredContent": conflict} if conflict else {}),
+                    }
+                }
     else:
         if req_id is not None:
             response_payload = {

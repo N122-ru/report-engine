@@ -266,7 +266,7 @@ export function useLinterStatus(
         } catch {
           // Keep the original source when it is not valid URI encoding.
         }
-        return decoded.split(/[/\\]/).pop() === file.name;
+        return resolveImageName(decoded, knownNames) === file.name;
       });
       if (!used) warnings.push(`Прикреплённое изображение «${file.name}» не вставлено в отчёт.`);
     }

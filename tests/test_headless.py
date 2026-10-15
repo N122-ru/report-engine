@@ -68,6 +68,14 @@ def test_metadata_update_preserves_other_fields_and_checks_revision(report):
     assert report.get_report_state() == before
 
 
+def test_headless_image_usage_resolves_normalized_filename_aliases(report):
+    report.create_report()
+    state = report.get_report_state()
+    report.upload_image("Схема_сети.png", b"\x89PNG\r\n\x1a\n", state["image_revision"])
+    report.content = "![Схема](<Схема сети.png>)"
+    assert report.list_images()[0]["is_in_report"] is True
+
+
 def test_headless_import_profile_accepts_object_and_requires_revision_for_existing_report(report):
     profile = {
         "format": "report-engine-profile",

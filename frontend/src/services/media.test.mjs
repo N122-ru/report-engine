@@ -24,6 +24,16 @@ test('adding a batch deduplicates both existing and newly added server-normalize
   assert.deepEqual(result.duplicates, ['Снимок 1.png', 'next.png']);
 });
 
+test('media input accepts only backend-supported image formats and size', () => {
+  const supported = new File(['png'], 'screen.png', { type: 'image/png' });
+  const unsupported = new File(['svg'], 'screen.svg', { type: 'image/svg+xml' });
+  const oversized = new File(['x'], 'large.png', { type: 'image/png' });
+  Object.defineProperty(oversized, 'size', { value: 15 * 1024 * 1024 + 1 });
+  const result = mergeImageFiles([], [supported, unsupported, oversized]);
+  assert.deepEqual(result.added, [supported]);
+  assert.deepEqual(result.rejected, ['screen.svg', 'large.png']);
+});
+
 test('media sorting uses natural filenames, offers reverse and size order, and never mutates attachments', () => {
   const files = [
     new File(['123'], 'Снимок_10.png'),

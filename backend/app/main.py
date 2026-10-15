@@ -33,6 +33,7 @@ from .engine.security import (
     MAX_VERIFY_SIZE
 )
 from .engine.image_input import validate_image_data
+from .engine.local_files import local_files_enabled
 
 from .engine.mcp_router import router as mcp_router
 
@@ -108,6 +109,8 @@ async def generate_report(
 
     if len(content.encode("utf-8")) > MAX_MARKDOWN_SIZE:
         raise HTTPException(status_code=413, detail="Размер текста отчета превышает допустимый лимит (500 КБ)")
+    if len(meta.encode("utf-8")) > MAX_MARKDOWN_SIZE:
+        raise HTTPException(status_code=413, detail="Размер реквизитов отчёта превышает допустимый лимит (500 КБ)")
 
     if len(images) > MAX_IMAGES_COUNT:
         raise HTTPException(status_code=400, detail=f"Превышено максимальное количество иллюстраций ({MAX_IMAGES_COUNT})")
@@ -115,6 +118,11 @@ async def generate_report(
     try:
         meta_dict = json.loads(meta)
         meta_obj = ReportMetadata(**meta_dict)
+        custom_logo = meta_dict.get("custom_logo") if isinstance(meta_dict, dict) else None
+        if custom_logo and not local_files_enabled() and not (
+            isinstance(custom_logo, str) and custom_logo.startswith("data:image/") and ";base64," in custom_logo
+        ):
+            raise ValueError("Путь к пользовательскому логотипу доступен только в автономной сборке")
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Ошибка разбора метаданных: {str(e)}")
 

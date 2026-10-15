@@ -203,6 +203,18 @@ def test_browser_sync_rejects_stale_metadata_without_losing_agent_edit():
     assert client.get(f"/api/session/init?token={token}").json()["meta"]["work_theme"] == "Тема от агента"
 
 
+def test_browser_sync_rejects_server_local_logo_path_when_not_standalone(monkeypatch):
+    from app.engine import local_files
+
+    monkeypatch.setattr(local_files, "_LOCAL_FILES_ENABLED", False)
+    token = client.get("/api/session/init").json()["token"]
+    response = client.post(f"/api/session/{token}/sync", json={
+        "meta": {"logo_mode": "custom", "custom_logo": "/srv/private/logo.png"},
+    })
+    assert response.status_code == 422
+    assert "автономной" in response.json()["detail"]
+
+
 @pytest.mark.anyio
 async def test_browser_sync_marks_sse_event_with_originating_client():
     from app.engine.sessions import session_manager
@@ -576,6 +588,37 @@ def test_mcp_delete_image_tool():
     rm_payload = _json.loads(rm.json()["result"]["content"][0]["text"])
     assert rm_payload["status"] == "deleted"
     assert len(client.get(f"/api/session/init?token={token}").json()["images"]) == 0
+
+
+def test_mcp_json_rpc_boundary_rejects_non_object_params_without_500():
+    token = client.get("/api/session/init").json()["token"]
+    invalid_body = client.post(f"/api/mcp/messages?token={token}", json=["not", "an", "object"])
+    assert invalid_body.status_code == 200
+    assert invalid_body.json()["error"]["code"] == -32600
+
+    invalid_params = client.post(f"/api/mcp/messages?token={token}", json={
+        "jsonrpc": "2.0", "id": 21, "method": "tools/call",
+        "params": {"name": "get_report_state", "arguments": []},
+    })
+    assert invalid_params.status_code == 200
+    assert invalid_params.json()["error"]["code"] == -32602
+
+
+def test_live_upload_preflights_markdown_limit_before_storing_image():
+    from app.engine.security import MAX_MARKDOWN_SIZE
+    import base64
+
+    token = client.get("/api/session/init").json()["token"]
+    content = "x" * (MAX_MARKDOWN_SIZE - 1)
+    client.post(f"/api/session/{token}/sync", json={"content": content})
+    state = client.get(f"/api/session/init?token={token}").json()
+    result, _ = _call_report_tool(token, "upload_image", {
+        "filename": "too-large.png", "base64_data": base64.b64encode(VALID_PNG).decode(),
+        "insert_into_report": True, "expected_revision": state["revision"],
+    })
+    assert result["isError"] is True
+    assert client.get(f"/api/session/{token}/images").json()["images"] == []
+    assert client.get(f"/api/session/init?token={token}").json()["content"] == content
 
 
 def test_mcp_batch_delete_images_is_atomic_and_skips_referenced_files():

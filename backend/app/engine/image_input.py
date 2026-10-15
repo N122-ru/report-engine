@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 MAX_IMAGE_SIZE = 15 * 1024 * 1024
 MAX_IMAGES_COUNT = 150
+MAX_BASE64_IMAGE_LENGTH = ((MAX_IMAGE_SIZE + 2) // 3) * 4
 IMAGE_SIGNATURES = (
     b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a",
 )
@@ -54,6 +55,11 @@ def load_image_input(
     if encoded is not None:
         if not isinstance(encoded, str) or not encoded.strip():
             raise ValueError("Параметр base64_data должен быть непустой строкой")
+        normalized = encoded.strip()
+        if "base64," in normalized[:64].lower():
+            normalized = normalized.split(",", 1)[1]
+        if len(normalized) > MAX_BASE64_IMAGE_LENGTH:
+            raise ValueError(f"Закодированное изображение превышает лимит {MAX_IMAGE_SIZE // (1024 * 1024)} МБ")
         return decode_base64(encoded)
     if not isinstance(file_path, str) or not file_path.strip():
         raise ValueError("Параметр file_path должен быть непустой строкой")

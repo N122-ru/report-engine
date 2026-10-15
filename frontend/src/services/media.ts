@@ -3,9 +3,10 @@ export type MediaSort = 'name-asc' | 'name-desc' | 'size-desc';
 const filenameOrder = new Intl.Collator('ru', { numeric: true, sensitivity: 'base' });
 const imageTypes: Record<string, string> = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
-  webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml',
-  tif: 'image/tiff', tiff: 'image/tiff', avif: 'image/avif', ico: 'image/x-icon',
+  webp: 'image/webp',
 };
+const supportedImageTypes = new Set(Object.values(imageTypes));
+export const MAX_IMAGE_SIZE_BYTES = 15 * 1024 * 1024;
 
 const uploadName = (name: string): string =>
   (name.replaceAll('\\', '/').split('/').pop() || '').trim().replace(/[^\p{L}\p{N}_.-]/gu, '_');
@@ -19,7 +20,7 @@ export function mergeImageFiles(existing: File[], incoming: Iterable<File>) {
     const extension = file.name.split('.').pop()?.toLowerCase() || '';
     const type = file.type.startsWith('image/') ? file.type
       : (!file.type || file.type === 'application/octet-stream') ? imageTypes[extension] : undefined;
-    if (!type) {
+    if (!type || !supportedImageTypes.has(type) || file.size > MAX_IMAGE_SIZE_BYTES) {
       rejected.push(file.name);
       continue;
     }

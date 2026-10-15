@@ -182,7 +182,7 @@ export const MediaDrawer: React.FC<MediaDrawerProps> = ({
             e.target.value = '';
           }}
           multiple
-          accept="image/*,.png,.jpg,.jpeg,.gif,.webp,.bmp,.svg,.tif,.tiff,.avif,.ico"
+           accept="image/png,image/jpeg,image/gif,image/webp,.png,.jpg,.jpeg,.gif,.webp"
           aria-label="Файлы изображений"
           className="hidden"
         />

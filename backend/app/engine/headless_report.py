@@ -20,7 +20,8 @@ from .pdf_converter import convert_docx_to_pdf
 from .markdown_parser import _image_size
 from .typography import apply_typography_rules, strip_trailing_dot
 from .profile import profile_metadata, validate_profile
-from .image_input import MAX_IMAGE_SIZE, MAX_IMAGES_COUNT
+from .image_input import MAX_IMAGE_SIZE, MAX_IMAGES_COUNT, validate_image_data
+from .image_refs import resolve_image_name
 from .report_safety import (
     MAX_MARKDOWN_BYTES, OperationCache, ReportVerification, add_content_guards,
     report_digest, validate_detail, with_snapshot,
@@ -108,7 +109,9 @@ class HeadlessReport:
             for child in token.children:
                 if child.type == "image":
                     src = unquote(child.attrGet("src") or "")
-                    used_names.add(os.path.basename(src.replace("\\", "/")))
+                    resolved = resolve_image_name(src, self.images)
+                    if resolved is not None:
+                        used_names.add(resolved)
         result = []
         for filename, data in self.images.items():
             dimensions = _image_size(data)
@@ -276,6 +279,10 @@ class HeadlessReport:
                 raise ValueError("Профиль содержит некорректный пользовательский логотип") from exc
             if not decoded or len(decoded) > 2 * 1024 * 1024:
                 raise ValueError("Размер пользовательского логотипа превышает 2 МБ")
+            try:
+                validate_image_data(decoded)
+            except ValueError as exc:
+                raise ValueError("Профиль содержит некорректный пользовательский логотип") from exc
         if len(json.dumps(metadata, ensure_ascii=False).encode("utf-8")) > MAX_MARKDOWN_BYTES:
             raise ValueError("Размер реквизитов отчёта превышает 500 КБ")
         try:

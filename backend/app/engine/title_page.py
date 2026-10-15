@@ -25,6 +25,7 @@ from .oxml_utils import (
     set_table_row_cant_split
 )
 from .image_input import validate_image_data
+from .local_files import local_files_enabled
 
 MAX_CUSTOM_LOGO_SIZE = 2 * 1024 * 1024
 
@@ -71,6 +72,8 @@ def _resolve_custom_logo(custom_logo: str | None) -> str | None:
             return tmp.name
         except Exception:
             return None
+    if not local_files_enabled():
+        return None
     if os.path.exists(raw):
         try:
             with open(raw, "rb") as source:

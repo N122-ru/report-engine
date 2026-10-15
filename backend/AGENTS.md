@@ -20,7 +20,7 @@ Own the FastAPI application that validates reports, generates DOCX/PDF files, se
 - Keep the backend and frontend implementations aligned where the same formatter or validation behavior is mirrored.
 - Validate the shared `report-engine-profile` format at the MCP boundary and apply it atomically under the current metadata revision.
 - Treat PDF as a runtime capability; DOCX generation must not depend on an office converter.
-- `app/engine/image_input.py` owns shared image limits and magic-byte validation. HTTP, sessions, and headless re-export the size/count constants; every image ingress validates supported signatures, and local MCP image paths use bounded reads with exactly one of `base64_data` or `file_path`.
+- `app/engine/image_input.py` owns shared image limits, encoded-input bounds, and magic-byte validation. HTTP, sessions, and headless re-export the size/count constants; every image ingress validates supported signatures, and local MCP image paths use bounded reads with exactly one of `base64_data` or `file_path`.
 - `SessionData.mcp_write_lock` serializes every live text, metadata, and image mutation from both MCP and browser HTTP routes; revision checks and the corresponding state write stay inside that lock.
 - `security.validate_markdown_size` is the shared 500 KiB guard for live session text. Session writes reject oversized content even when they do not enter through the main document-generation route.
 - `app/engine/image_refs.py` owns normalized Markdown image-name resolution. Ambiguous normalized matches are rejected rather than selected; browser parity is covered by `tests/image_ref_cases.json` and `frontend/src/services/imageRefs.ts`.
@@ -33,6 +33,7 @@ Own the FastAPI application that validates reports, generates DOCX/PDF files, se
 - Onboarding has no questionnaire: at most one short question clarifies one-shot versus ongoing use. One-shot skips the playbook; ongoing or unknown use proceeds autonomously. The agent maintains client optimizations after every session without changing the server manifest; preserve the environment checklist and manifest header.
 - Live and headless MCP share the `snapshot_id` contract, structured revision conflicts, operation-id replay protection, and batch result references; legacy revision arguments remain supported.
 - `app/engine/local_files.py` owns the server-local file-source policy: headless always reads paths, the portable web launcher enables them at startup, and networked deployments stay base64-only. Live `file_path` handling rejects other runs with an actionable error, omits the argument from `tools/list` schemas there, and still validates image signatures before storing. Operation replay caches are bounded to 8 MiB with a 256 KiB per-result limit.
+- Live browser metadata is validated before session writes; custom-logo paths are accepted only in local standalone processes, while networked generation accepts embedded image data only. Direct document generation keeps the same local-file guard as a defense in depth.
 
 ## Work Guidance
 

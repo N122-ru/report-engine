@@ -13,6 +13,8 @@ import mimetypes
 import hashlib
 import json
 import difflib
+import base64
+import binascii
 from collections import deque
 from collections import Counter
 from urllib.parse import unquote
@@ -20,12 +22,44 @@ from markdown_it import MarkdownIt
 from typing import Dict, List, Optional, Set, Any
 
 from .markdown_parser import _image_size
-from .image_input import MAX_IMAGE_SIZE, MAX_IMAGES_COUNT
+from .image_input import MAX_IMAGE_SIZE, MAX_IMAGES_COUNT, validate_image_data
+from .local_files import local_files_enabled
 from .report_safety import OperationCache, ReportVerification, with_snapshot
 from .security import validate_markdown_size
 from .image_refs import canonical_image_name
+from ..models.report import ReportMetadata
 
 MAX_INACTIVE_HOURS = 48
+
+
+def validate_session_metadata(meta: dict) -> dict:
+    """Validate browser metadata before it enters a live session."""
+    if not isinstance(meta, dict):
+        raise ValueError("Реквизиты отчёта должны быть объектом")
+    unknown = set(meta) - ReportMetadata.model_fields.keys()
+    if unknown:
+        raise ValueError("Переданы неизвестные реквизиты отчёта")
+    if len(json.dumps(meta, ensure_ascii=False).encode("utf-8")) > 500 * 1024:
+        raise ValueError("Размер реквизитов отчёта превышает 500 КБ")
+    try:
+        ReportMetadata.model_validate(meta)
+    except ValueError as exc:
+        raise ValueError("Реквизиты отчёта не соответствуют схеме") from exc
+
+    logo = meta.get("custom_logo")
+    if logo is None or logo == "":
+        return meta
+    if not isinstance(logo, str):
+        raise ValueError("Пользовательский логотип должен быть строкой")
+    if logo.startswith("data:image/") and ";base64," in logo:
+        try:
+            data = base64.b64decode(logo.split(";base64,", 1)[1], validate=True)
+            validate_image_data(data)
+        except (ValueError, binascii.Error) as exc:
+            raise ValueError("Пользовательский логотип содержит некорректные данные") from exc
+    elif not local_files_enabled():
+        raise ValueError("Путь к пользовательскому логотипу доступен только в автономной сборке")
+    return meta
 
 
 def build_content_patches(before: str, after: str) -> List[Dict[str, Any]]:
@@ -312,6 +346,7 @@ class SessionManager:
         source: str = "web",
         client_id: Optional[str] = None,
     ) -> SessionData:
+        meta = validate_session_metadata(meta)
         session = self.get_or_create(token)
         if meta == session.meta:
             return session

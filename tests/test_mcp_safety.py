@@ -269,13 +269,13 @@ def test_agent_onboarding_skips_questionnaire_and_keeps_one_shot_exit(include_fi
 
     text = agent_onboarding_prompt("TestClient", include_file_path=include_file_path)
 
-    assert "максимум один короткий вопрос" in text.lower()
-    assert "только если" in text.lower()
-    assert "работа с этим сервером разовая или постоянная?" in text
-    assert "постоянная или неизвестно" in text.lower()
-    assert "без дополнительных вопросов" in text
-    assert "Если задача one-shot, памятку вовсе не создавай" in text
+    assert "Если задача заведомо разовая" in text
+    assert "памятку не создавай и заверши onboarding" in text
+    assert "продолжай без вопросов" in text
+    assert "постоянство подтвердится" in text
     assert "заверши onboarding" in text
+    # The self-contradictory question loop must stay removed.
+    assert "разовая или постоянная" not in text
     for obsolete in ("4 вопроса", "Кто вы", "Где лежат исходники", "субагент", "после ответов пользователя"):
         assert obsolete not in text
 
@@ -372,7 +372,8 @@ async def test_layered_resources_and_core_prompt_in_both_transports(transport):
         })
         onboarding_text = onboarding["messages"][0]["content"]["text"]
         assert "Hermes" in onboarding_text
-        assert "максимум один короткий вопрос" in onboarding_text.lower()
+        assert "заверши onboarding" in onboarding_text.lower()
+        assert "продолжай без вопросов" in onboarding_text.lower()
         assert "4 вопроса" not in onboarding_text
         assert "Локальный профиль клиента" in onboarding_text
         assert "READ-ONLY" in onboarding_text
@@ -390,7 +391,7 @@ async def test_layered_resources_and_core_prompt_in_both_transports(transport):
         assert "created_at:" in onboarding_text
         assert "### Клиентские оптимизации" in onboarding_text
         assert "серверный блок заменяется целиком" in onboarding_text.lower()
-        assert "памятку вовсе не создавай" in onboarding_text.lower()
+        assert "памятку не создавай" in onboarding_text.lower()
         assert "report://rules/gost732" in onboarding_text
         assert "ядро >" in onboarding_text
         assert "не переопределяет серверные правила" in onboarding_text

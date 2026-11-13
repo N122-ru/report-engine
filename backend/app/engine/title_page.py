@@ -406,16 +406,17 @@ def add_title_page(doc: Document, meta: ReportMetadata):
     # -------------------------------------------------------------
     # Footer: city and year without a year abbreviation.
     # -------------------------------------------------------------
-    p_footer = doc.add_paragraph()
-    p_footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p_footer_pr = p_footer._p.get_or_add_pPr()
-    p_footer_pr.append(parse_xml(f'<w:spacing {nsdecls("w")} w:before="{gap3}" w:after="0" w:line="240" w:lineRule="auto"/>'))
-    p_footer_pr.append(parse_xml(f'<w:ind {nsdecls("w")} w:firstLine="0" w:left="0" w:right="0"/>'))
-    clean_city = re.sub(r"^\s*г\.\s*|^\s*г\s+", "", (meta.city or "").strip(), flags=re.IGNORECASE)
-    clean_city = re.sub(r"[\s,]+г\.?\s*$", "", clean_city, flags=re.IGNORECASE).strip() or "Город"
-    r_footer = p_footer.add_run(f"{clean_city} {meta.year}")
-    r_footer.font.name = "Times New Roman"
-    r_footer.font.size = Pt(12)
+    if meta.year is not None:
+        p_footer = doc.add_paragraph()
+        p_footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p_footer_pr = p_footer._p.get_or_add_pPr()
+        p_footer_pr.append(parse_xml(f'<w:spacing {nsdecls("w")} w:before="{gap3}" w:after="0" w:line="240" w:lineRule="auto"/>'))
+        p_footer_pr.append(parse_xml(f'<w:ind {nsdecls("w")} w:firstLine="0" w:left="0" w:right="0"/>'))
+        clean_city = re.sub(r"^\s*г\.\s*|^\s*г\s+", "", (meta.city or "").strip(), flags=re.IGNORECASE)
+        clean_city = re.sub(r"[\s,]+г\.?\s*$", "", clean_city, flags=re.IGNORECASE).strip() or "Город"
+        r_footer = p_footer.add_run(f"{clean_city} {meta.year}")
+        r_footer.font.name = "Times New Roman"
+        r_footer.font.size = Pt(12)
 
 
 def _set_cell_text(cell, text: str, bold: bool = False, align=WD_ALIGN_PARAGRAPH.LEFT, size=Pt(11), spacing: int = 20):

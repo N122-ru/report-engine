@@ -41,14 +41,17 @@ def validate_session_metadata(meta: dict) -> dict:
         raise ValueError("Переданы неизвестные реквизиты отчёта")
     if len(json.dumps(meta, ensure_ascii=False).encode("utf-8")) > 500 * 1024:
         raise ValueError("Размер реквизитов отчёта превышает 500 КБ")
+    normalized_meta = dict(meta)
+    if normalized_meta.get("year") == "":
+        normalized_meta["year"] = None
     try:
-        ReportMetadata.model_validate(meta)
+        ReportMetadata.model_validate(normalized_meta)
     except ValueError as exc:
         raise ValueError("Реквизиты отчёта не соответствуют схеме") from exc
 
     logo = meta.get("custom_logo")
     if logo is None or logo == "":
-        return meta
+        return normalized_meta
     if not isinstance(logo, str):
         raise ValueError("Пользовательский логотип должен быть строкой")
     if logo.startswith("data:image/") and ";base64," in logo:
@@ -59,7 +62,7 @@ def validate_session_metadata(meta: dict) -> dict:
             raise ValueError("Пользовательский логотип содержит некорректные данные") from exc
     elif not local_files_enabled():
         raise ValueError("Путь к пользовательскому логотипу доступен только в автономной сборке")
-    return meta
+    return normalized_meta
 
 
 def build_content_patches(before: str, after: str) -> List[Dict[str, Any]]:

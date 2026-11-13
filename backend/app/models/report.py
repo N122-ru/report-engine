@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt, field_validator
 from typing import Dict, List, Literal, Optional
 
 class StudentInfo(BaseModel):
@@ -72,7 +72,7 @@ class ReportMetadata(BaseModel):
         default_factory=lambda: [TeacherInfo(fio="", role="ст. преп.")]
     )
     city: str = Field(default="")
-    year: int = Field(default=2026)
+    year: Optional[StrictInt] = Field(default=2026)
     heading_alignment: str = Field(default="center", description="Выравнивание заголовков разделов (center — ГОСТ 7.32 | left — методички)")
     page_numbering: str = Field(default="center", description="Нумерация страниц (center | right | none)")
     page_break_before_h1: bool = Field(default=False, description="Разрыв страницы перед каждым разделом 1-го уровня")
@@ -81,6 +81,16 @@ class ReportMetadata(BaseModel):
     prompt_latex: Optional[bool] = Field(default=True, description="Требовать ли формулы LaTeX в ИИ-промптах (на DOCX не влияет)")
     prompt_code_blocks: Optional[bool] = Field(default=False, description="Разрешать ли блоки текста и кода ``` (на DOCX не влияет)")
     latex_mode: Optional[str] = Field(default="omml", description="Формулы LaTeX: omml (нативные) | unicode (нарочно упрощённый текст)")
+
+    @field_validator("year", mode="before")
+    @classmethod
+    def normalize_year(cls, value):
+        """Treat an empty year as omitted while preserving strict numeric validation."""
+        if value is None or (isinstance(value, str) and value == ""):
+            return None
+        if type(value) is not int:
+            raise ValueError("year: укажите число или оставьте пустым")
+        return value
 
 class GenerateOptions(BaseModel):
     include_title_page: bool = True

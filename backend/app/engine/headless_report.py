@@ -22,8 +22,10 @@ from .typography import apply_typography_rules, strip_trailing_dot
 from .profile import profile_metadata, validate_profile
 from .image_input import MAX_IMAGE_SIZE, MAX_IMAGES_COUNT, validate_image_data
 from .image_refs import resolve_image_name
+from .section_editor import normalize_section_heading
 from .report_safety import (
     MAX_MARKDOWN_BYTES, OperationCache, ReportVerification, add_content_guards,
+    add_missing_year_warning,
     report_digest, validate_detail, with_snapshot,
 )
 
@@ -288,6 +290,8 @@ class HeadlessReport:
         try:
             return ReportMetadata.model_validate(metadata, strict=True)
         except ValueError as exc:
+            if "year: укажите число или оставьте пустым" in str(exc):
+                raise ValueError("year: укажите число или оставьте пустым") from exc
             raise ValueError("Реквизиты отчёта не соответствуют схеме") from exc
 
     def create_report(self, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -351,9 +355,10 @@ class HeadlessReport:
     ) -> dict[str, Any]:
         """Add a section or replace its body while preserving adjacent sections."""
         self._check_expected(expected_snapshot_id, {"revision": expected_revision})
-        heading = section_heading.strip()
-        if not re.fullmatch(r"#{1,6} [^\r\n]+", heading):
-            raise ValueError("Заголовок должен быть одной строкой Markdown с #")
+        heading, normalized = normalize_section_heading(
+            section_heading,
+            error_message="Заголовок должен быть одной строкой Markdown с #",
+        )
         parser = MarkdownIt("commonmark")
         headings = [t for t in parser.parse(self.content) if t.type == "heading_open" and t.map]
         lines = self.content.splitlines(keepends=True)
@@ -375,7 +380,7 @@ class HeadlessReport:
             self.verification.changed()
             self._invalidate_revisions()
         self.content = next_content
-        return self._revisions()
+        return self._revisions() | {"normalized": normalized}
 
     def autofix_typography(self, expected_revision: str | None = None,
                            *, expected_snapshot_id: str | None = None) -> dict[str, Any]:
@@ -420,14 +425,15 @@ class HeadlessReport:
             references=metadata.references,
             source_markdown=self.content,
         )
-        return add_content_guards({
+        result = add_missing_year_warning({
             "is_valid": result.is_valid,
             "status": result.status,
             "score": result.score,
             "errors": [item.model_dump() for item in result.errors],
             "warnings": [item.model_dump() for item in result.warnings],
             "metrics": result.metrics.model_dump() if result.metrics else {},
-        }, self.content, self.images)
+        }, metadata.year)
+        return add_content_guards(result, self.content, self.images)
 
     def review_snapshot(self) -> dict[str, Any]:
         """Return a transferable report and lint snapshot without media bytes or mutation."""

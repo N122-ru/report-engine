@@ -8,6 +8,7 @@ import pytest
 from docx import Document
 
 from backend.app.engine.headless_report import HeadlessReport
+from backend.app.engine.generator import build_docx_report
 
 
 def call_tool(report, name, arguments):
@@ -66,6 +67,47 @@ def test_metadata_update_preserves_other_fields_and_checks_revision(report):
     with pytest.raises(ValueError, match="верси"):
         report.update_meta({"city": "Самара"}, state["meta_revision"])
     assert report.get_report_state() == before
+
+
+@pytest.mark.parametrize("year", [None, ""])
+def test_empty_year_is_normalized_and_omitted_from_title(report, year):
+    state = report.create_report({"city": "Москва", "year": year})
+
+    assert state["metadata"]["year"] is None
+    doc = Document(build_docx_report(report.metadata, ""))
+    assert not any("19" in paragraph.text or "20" in paragraph.text for paragraph in doc.paragraphs)
+
+
+def test_non_numeric_year_has_actionable_error(report):
+    with pytest.raises(ValueError, match=r"^year: укажите число или оставьте пустым$"):
+        report.create_report({"year": "не год"})
+
+
+def test_lint_warns_about_missing_year_without_blocking_export(report):
+    report.create_report({"city": "Москва", "year": None})
+    add_section(report, "# Цель работы", "Исследование.")
+
+    lint = report.lint_report()
+    year_warnings = [warning for warning in lint["warnings"] if warning["type"] == "META"]
+
+    assert any(warning["message"] == "Год работы не указан" for warning in year_warnings)
+    assert lint["export_blockers"] == []
+    state = report.get_report_state()
+    result = report.export_report(
+        "report.docx", state["revision"], state["meta_revision"], state["image_revision"]
+    )
+    assert result["path"].endswith("report.docx")
+
+
+def test_section_heading_without_hash_is_normalized(report):
+    report.create_report()
+
+    result = report.append_or_update_section(
+        "Цель работы", "Исследование.", report.get_report_state()["revision"]
+    )
+
+    assert result["normalized"] is True
+    assert report.get_report_state()["markdown_content"].startswith("# Цель работы\n")
 
 
 def test_headless_image_usage_resolves_normalized_filename_aliases(report):

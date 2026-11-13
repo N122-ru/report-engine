@@ -1110,6 +1110,38 @@ def test_section_replace_ignores_headings_in_blockquotes():
     )
 
 
+def test_live_section_heading_without_hash_is_normalized():
+    token = client.get("/api/session/init").json()["token"]
+    _, state = _call_report_tool(token, "get_report_state", {})
+
+    result, payload = _call_report_tool(token, "append_or_update_section", {
+        "section_heading": "Цель работы",
+        "section_content": "Исследование.",
+        "expected_revision": state["revision"],
+    })
+
+    assert result["isError"] is False
+    assert payload["normalized"] is True
+    assert client.get(f"/api/session/init?token={token}").json()["content"].startswith(
+        "# Цель работы\n"
+    )
+
+
+@pytest.mark.parametrize("heading", ["Цель работы\nПродолжение", "Цель работы\n"])
+def test_live_multiline_section_heading_is_rejected(heading):
+    token = client.get("/api/session/init").json()["token"]
+    _, state = _call_report_tool(token, "get_report_state", {})
+
+    result, _ = _call_report_tool(token, "append_or_update_section", {
+        "section_heading": heading,
+        "section_content": "Исследование.",
+        "expected_revision": state["revision"],
+    })
+
+    assert result["isError"] is True
+    assert "section_heading должен быть одной строкой" in result["content"][0]["text"]
+
+
 def test_section_append_to_body_and_duplicate_heading_rejection():
     token = client.get("/api/session/init").json()["token"]
     original = "# Ход работы\nПервое.\n\n## Задание 1\nТекст.\n\n# Вывод\nИтог.\n"

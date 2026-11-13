@@ -94,6 +94,25 @@ def add_content_guards(result: dict[str, Any], markdown: str, images: dict[str, 
     return result | guards
 
 
+def add_missing_year_warning(result: dict[str, Any], year: int | None) -> dict[str, Any]:
+    """Add a non-blocking metadata warning when the title year is omitted."""
+    if year is not None:
+        return result
+    warning = {
+        "type": "META",
+        "severity": "WARNING",
+        "message": "Год работы не указан",
+        "location": "Титульный лист",
+        "fix_suggestion": "При необходимости укажите год работы",
+    }
+    return {
+        **result,
+        "warnings": result["warnings"] + [warning],
+        "score": max(0, result["score"] - 4),
+        "status": "needs_review" if result.get("status") == "ready" else result["status"],
+    }
+
+
 def report_digest(markdown: str, images: dict[str, bytes]) -> dict[str, Any]:
     """Return section headings and word counts without disclosing the full body."""
     return {

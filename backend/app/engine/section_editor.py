@@ -20,6 +20,19 @@ def section_identifier(revision: str, start: int) -> str:
     return "section:" + hashlib.sha256(f"{revision}:{start}".encode()).hexdigest()[:20]
 
 
+def normalize_section_heading(heading: str, *, error_message: str = "section_heading должен быть одной строкой с Markdown-заголовком") -> tuple[str, bool]:
+    """Normalize a plain section title to a level-one Markdown heading."""
+    if "\r" in heading or "\n" in heading:
+        raise ValueError(error_message)
+    heading = heading.strip()
+    normalized = not heading.startswith("#")
+    if normalized:
+        heading = f"# {heading}"
+    if not re.fullmatch(r"#{1,6}[ \t]+[^\r\n]+", heading):
+        raise ValueError(error_message)
+    return heading, normalized
+
+
 def sections(markdown: str) -> list[Section]:
     """Find heading boundaries outside lists, blockquotes, and code blocks."""
     lines = markdown.splitlines(keepends=True)
@@ -41,9 +54,7 @@ def sections(markdown: str) -> list[Section]:
 def edit_section(markdown: str, heading: str, content: str, mode: str,
                  section_id: str | None = None, revision: str | None = None) -> tuple[str, str]:
     """Return new Markdown and status without changing the source on failure."""
-    heading = heading.strip()
-    if not re.fullmatch(r"#{1,6}[ \t]+[^\n]+", heading):
-        raise ValueError("section_heading должен быть одной строкой с Markdown-заголовком")
+    heading, _ = normalize_section_heading(heading)
     if mode not in ("update_or_append", "replace", "append", "replace_body", "append_to_body"):
         raise ValueError(f"Неизвестный режим редактирования: {mode}")
     found = sections(markdown)

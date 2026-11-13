@@ -34,6 +34,7 @@ from .generator import build_docx_report
 from .linter import lint_docx_document
 from .typography import apply_typography_outside_code, strip_trailing_dot
 from .section_editor import edit_section, sections, section_identifier
+from .section_editor import normalize_section_heading
 from .block_editor import blocks, edit_block, move_figure
 from .profile import load_profile_input, profile_metadata
 from .image_input import (
@@ -52,7 +53,7 @@ from .mcp_manifest import (
     with_unified_mutation_fields,
 )
 from .report_safety import (
-    REVISION_FIELDS, add_content_guards, conflict_payload, is_conflict_message,
+    REVISION_FIELDS, add_content_guards, add_missing_year_warning, conflict_payload, is_conflict_message,
     operation_fingerprint, report_digest, require_revision_guard, validate_detail, with_snapshot,
 )
 from .agent_resources import (
@@ -465,7 +466,10 @@ MCP_LIVE_TOOLS = [
                 "university": {"type": "string", "description": "Полное наименование университета"},
                 "ministry": {"type": "string", "description": "Министерство (ведомство)"},
                 "city": {"type": "string", "description": "Город"},
-                "year": {"type": "integer", "description": "Год"},
+                "year": {
+                    "anyOf": [{"type": "integer"}, {"type": "string", "maxLength": 0}, {"type": "null"}],
+                    "description": "Год; передайте число или оставьте пустым",
+                },
                 "teachers": {
                     "type": "array",
                     "description": "Проверяющие: список {fio: 'И.О. Фамилия', role: должность}",
@@ -977,7 +981,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
                 "diff": session.edit_history[-1]["diff"]}
 
     elif tool_name == "append_or_update_section":
-        heading = args.get("section_heading", "").strip()
+        heading, normalized = normalize_section_heading(args.get("section_heading", ""))
         content = args.get("section_content", "").strip()
         mode = args.get("mode", "update_or_append")
         before = session.content
@@ -992,7 +996,8 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         after_headings = [s.heading for s in sections(new_md)]
         if new_md == before:
             return {"status": "unchanged", "full_length": len(before), "revision": revision,
-                    "headings_before": before_headings, "headings_after": after_headings, "diff": ""}
+                    "headings_before": before_headings, "headings_after": after_headings,
+                    "diff": "", "normalized": normalized}
         diff = "".join(difflib.unified_diff(before.splitlines(keepends=True), new_md.splitlines(keepends=True),
                                              fromfile="до", tofile="после"))
         # Build and validate before the single state write.
@@ -1010,7 +1015,8 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
             "revision": session.revision,
             "headings_before": before_headings,
             "headings_after": after_headings,
-            "diff": diff
+            "diff": diff,
+            "normalized": normalized,
         }
 
     elif tool_name == "patch_text":
@@ -1079,12 +1085,19 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         if not patch:
             raise ValueError("Не передано ни одного обновляемого поля")
         merged = {**(session.meta or {}), **patch}
+        if merged.get("year") == "":
+            merged["year"] = None
         # Validate final metadata to protect title-page generation.
         # Validate references separately and omit malformed entries.
         refs = merged.get("references")
         if isinstance(refs, list):
             merged["references"] = [r for r in refs if isinstance(r, dict)]
-        ReportMetadata(**merged)
+        try:
+            ReportMetadata(**merged)
+        except ValueError as exc:
+            if "year: укажите число или оставьте пустым" in str(exc):
+                raise ValueError("year: укажите число или оставьте пустым") from exc
+            raise
         changed = merged != session.meta
         await session_manager.update_meta(
             token=session.token,
@@ -1204,8 +1217,12 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         if not isinstance(text_to_check, str) or len(text_to_check.encode("utf-8")) > MAX_MARKDOWN_SIZE:
             raise ValueError("Размер текста отчёта превышает допустимый лимит (500 КБ)")
         if not text_to_check.strip():
-            result = add_content_guards({"is_valid": False, "status": "invalid", "score": 0,
-                                        "errors": [{"message": "Текст пуст"}], "warnings": []}, text_to_check, session.images)
+            result = add_missing_year_warning(
+                {"is_valid": False, "status": "invalid", "score": 0,
+                 "errors": [{"message": "Текст пуст"}], "warnings": []},
+                ReportMetadata(**session.meta).year if session.meta else ReportMetadata().year,
+            )
+            result = add_content_guards(result, text_to_check, session.images)
             if tool_name == "lint_report" and text_to_check == session.content:
                 session.verification.record_lint(_session_revisions(session), result)
             return _review_snapshot(session, result) if tool_name == "review_snapshot" else result
@@ -1263,14 +1280,15 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         metrics = res.metrics.model_dump()
         metrics["tasks_count"] = tasks_count
         metrics["attached_images_count"] = len(session.images)
-        result = add_content_guards({
+        result = add_missing_year_warning({
             "is_valid": res.is_valid,
             "status": "needs_review" if extra_warnings and res.status == "ready" else res.status,
             "score": max(0, res.score - 4 * len(extra_warnings)),
             "errors": [e.model_dump() for e in res.errors],
             "warnings": [w.model_dump() for w in res.warnings] + extra_warnings,
             "metrics": metrics
-        }, text_to_check, session.images)
+        }, meta_obj.year)
+        result = add_content_guards(result, text_to_check, session.images)
         if tool_name == "lint_report" and text_to_check == session.content:
             session.verification.record_lint(_session_revisions(session), result)
         return _review_snapshot(session, result) if tool_name == "review_snapshot" else result

@@ -1217,7 +1217,11 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
             images_dict=session.images,
             options=GenerateOptions()
         )
-        res = lint_docx_document(docx_buffer)
+        res = lint_docx_document(
+            docx_buffer,
+            references=session.meta.get("references"),
+            source_markdown=text_to_check,
+        )
         list_stack: list[str] = []
         ordered_tasks = 0
         task_headings = 0

@@ -415,7 +415,11 @@ class HeadlessReport:
         """Compute lint without changing workflow state for read-only reviews."""
         metadata = self._require_report()
         docx_buffer = build_docx_report(metadata, self.content, self.images)
-        result = lint_docx_document(docx_buffer)
+        result = lint_docx_document(
+            docx_buffer,
+            references=metadata.references,
+            source_markdown=self.content,
+        )
         return add_content_guards({
             "is_valid": result.is_valid,
             "status": result.status,

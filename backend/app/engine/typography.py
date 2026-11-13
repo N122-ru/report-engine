@@ -7,6 +7,16 @@ from markdown_it.rules_inline.backticks import backtick
 NBSP = '\u00a0'
 NB_HYPHEN = '\u2011'
 
+_NUMERIC_RANGE_RE = re.compile(
+    r'(?<![\w.-])\d+(?:[.,]\d+)?-(?:\d+(?:[.,]\d+)?)(?![\w-])'
+)
+_PROTECTED_RANGE_RE = re.compile(
+    r'(?ix)'
+    r'\b(?:https?|ftp)://[^\s<>()]+'
+    r'|(?<!\S)[^\s<>()\[\]]*[\\/][^\s<>()\[\]]*'
+    r'|(?<![\w])v?\d+(?:\.\d+){2,}(?:[-+][\w.-]+)?'
+)
+
 def _capture_code_span(state, silent):
     start = state.pos
     count = len(state.tokens)
@@ -24,6 +34,38 @@ def strip_trailing_dot(text: str) -> str:
     if s.endswith('.') and not s.endswith('..'):
         s = s[:-1].rstrip()
     return s
+
+
+def _prose_segments(markdown: str) -> list[str]:
+    """Return Markdown text nodes while excluding fenced and inline code."""
+    if not markdown:
+        return []
+    segments = []
+    for token in MarkdownIt("commonmark").parse(markdown):
+        if token.type != "inline":
+            continue
+        segments.extend(
+            child.content
+            for child in (token.children or [])
+            if child.type == "text" and child.content
+        )
+    return segments
+
+
+def find_numeric_range_hyphens(markdown: str) -> list[str]:
+    """Find ASCII hyphens used between numbers in prose text.
+
+    Markdown code, URLs, file paths, and semantic-version-like values are
+    masked before matching because they use hyphens as syntax or data.
+    """
+    matches = []
+    for segment in _prose_segments(markdown):
+        masked = list(segment)
+        for protected in _PROTECTED_RANGE_RE.finditer(segment):
+            for index in range(protected.start(), protected.end()):
+                masked[index] = " "
+        matches.extend(match.group(0) for match in _NUMERIC_RANGE_RE.finditer("".join(masked)))
+    return matches
 
 def apply_typography_rules(text: str) -> str:
     """Apply Russian typography rules under GOST 7.32-2017.

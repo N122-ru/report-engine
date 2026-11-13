@@ -7,12 +7,19 @@ from docx import Document
 from docx.oxml.ns import qn
 
 from ..models.linter import LinterIssue, LinterMetrics, LinterResult
+from .bibliography import REFERENCE_METADATA_FIELDS
+from .typography import find_numeric_range_hyphens
 
 # The project requires Times New Roman under GOST 7.32. Cambria Math and
 # Symbol are allowed only in equations, where Word selects them for OMML.
 ALLOWED_FONTS = frozenset({"Times New Roman", "Cambria Math", "Symbol"})
 
-def lint_docx_document(docx_file_or_stream) -> LinterResult:
+def lint_docx_document(
+    docx_file_or_stream,
+    *,
+    references=None,
+    source_markdown: str | None = None,
+) -> LinterResult:
     """Run a complete DOCX compliance audit."""
     doc = Document(docx_file_or_stream)
 
@@ -332,6 +339,17 @@ def lint_docx_document(docx_file_or_stream) -> LinterResult:
                 fix_suggestion="Опишите результат без упоминания путей и служебных папок"
             ))
 
+    # Numeric ranges in prose use an em dash; protected technical text is
+    # excluded by find_numeric_range_hyphens before matching.
+    numeric_source = source_markdown if source_markdown is not None else "\n".join(reference_paragraphs)
+    for range_text in find_numeric_range_hyphens(numeric_source):
+        warnings.append(LinterIssue(
+            type="PUNCTUATION", severity="WARNING",
+            message=f"В числовом диапазоне «{range_text}» используется дефис (-) вместо тире (–).",
+            location="Основной текст",
+            fix_suggestion="Замените дефис на тире (–)"
+        ))
+
     # Missing attachments are represented by text placeholders in the DOCX.
     seen_placeholders: set = set()
     for t in all_body_text:
@@ -363,6 +381,20 @@ def lint_docx_document(docx_file_or_stream) -> LinterResult:
                 message="В отчете присутствует раздел «Список источников», однако в тексте отсутствуют ссылки на литературу в квадратных скобках (например, [1]). По ГОСТ 7.32 на все приведенные источники должны быть ссылки в тексте.",
                 location="Список источников",
                 fix_suggestion="Добавьте в текст работы ссылки на источники, например: «...в соответствии с методикой [1]»"
+            ))
+
+    # Reference models retain extra fields so the lint result can identify
+    # metadata that bibliography rendering intentionally does not consume.
+    for index, reference in enumerate(references or [], start=1):
+        ref_dict = reference.model_dump() if hasattr(reference, "model_dump") else reference
+        if not isinstance(ref_dict, dict):
+            continue
+        for key in sorted(set(ref_dict) - REFERENCE_METADATA_FIELDS):
+            warnings.append(LinterIssue(
+                type="REFERENCE", severity="WARNING",
+                message=f'reference {index}: неизвестный ключ "{key}" — он не попадёт в рендер ГОСТ-ссылки',
+                location=f"Ссылка {index}",
+                fix_suggestion=f'Удалите неизвестный ключ "{key}" или перенесите данные в каноническое поле'
             ))
 
     # Require aim/procedure/conclusion only when at least one is present,

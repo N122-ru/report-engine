@@ -10,6 +10,8 @@ class TeacherInfo(BaseModel):
     role: str = Field(default="ст. преп.", description="Должность (преп., ст. преп., доцент, профессор)")
 
 class Reference(BaseModel):
+    # Preserve extra fields so lint_report can explain why the renderer ignores them.
+    model_config = {"extra": "allow"}
     id: str = Field(default="", description="Локальный идентификатор записи")
     kind: str = Field(default="book", description="Тип: book | article | website | standard")
     authors: str = Field(default="", description="Авторы (И.О. Фамилия)")

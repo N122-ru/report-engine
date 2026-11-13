@@ -238,6 +238,26 @@ def test_autofix_and_lint_are_in_memory(report):
     assert "score" in result
 
 
+def test_lint_report_warns_for_unknown_reference_keys(report):
+    """Verify lint_report exposes reference fields ignored by the renderer."""
+    report.create_report({
+        "references": [{
+            "kind": "book",
+            "title": "Тестовый источник",
+            "unknown_field": "Потерянные данные",
+        }],
+    })
+    add_section(report, "# Цель работы", "Исследование.")
+
+    result = report.lint_report()
+
+    warnings = [w for w in result["warnings"] if w["type"] == "REFERENCE"]
+    assert any(
+        w["message"] == 'reference 1: неизвестный ключ "unknown_field" — он не попадёт в рендер ГОСТ-ссылки'
+        for w in warnings
+    )
+
+
 def test_output_directory_must_already_exist(tmp_path):
     missing = tmp_path / "missing"
     with pytest.raises(ValueError):

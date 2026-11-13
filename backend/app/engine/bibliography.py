@@ -11,6 +11,14 @@ from .typography import apply_typography_rules
 
 REFERENCE_KINDS = ("book", "article", "website", "standard")
 
+# These are the only fields consumed by _compose_reference. Other metadata is
+# retained for linting so it cannot disappear silently during rendering.
+REFERENCE_FIELDS = frozenset({
+    "kind", "authors", "title", "place", "publisher", "year", "details", "url",
+})
+# The UI uses id as a non-rendered local identifier for editing a source.
+REFERENCE_METADATA_FIELDS = REFERENCE_FIELDS | {"id"}
+
 KIND_LABELS = {
     "book": "Книга",
     "article": "Статья",

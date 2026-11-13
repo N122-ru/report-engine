@@ -681,6 +681,34 @@ $$ (3)
     assert res.score >= 90
 
 
+def test_linter_warns_for_numeric_ranges_in_prose():
+    """Verify prose numeric ranges use an em dash instead of a hyphen."""
+    from app.engine.linter import lint_docx_document
+
+    md = "Диапазоны 3-5, 10-20 и 0.5-1.5 измерений."
+    res = lint_docx_document(build_docx_report(ReportMetadata(), md), source_markdown=md)
+    range_warnings = [w for w in res.warnings if w.type == "PUNCTUATION"]
+
+    assert len(range_warnings) == 3
+    assert all(w.severity == "WARNING" for w in range_warnings)
+    assert all(w.fix_suggestion == "Замените дефис на тире (–)" for w in range_warnings)
+    assert {"3-5", "10-20", "0.5-1.5"} <= {w.message.split("«")[1].split("»")[0] for w in range_warnings}
+
+
+def test_linter_ignores_numeric_hyphens_in_protected_text():
+    """Verify code, URLs, paths, and version numbers are not range warnings."""
+    from app.engine.linter import lint_docx_document
+
+    md = (
+        "`3-5` и версия v1.2.3-4, URL https://example.com/file-3-5.txt "
+        "и путь /tmp/file-10-20.txt.\n\n"
+        "```text\nvalue = 10-20\n```"
+    )
+    res = lint_docx_document(build_docx_report(ReportMetadata(), md), source_markdown=md)
+
+    assert not [w for w in res.warnings if w.type == "PUNCTUATION"]
+
+
 def test_figure_duplicate_caption_absorption():
     """Verify duplicate user or AI figure captions are consumed."""
     # A caption can follow on the next line of the same paragraph.

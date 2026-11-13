@@ -3,7 +3,9 @@ sys.path.insert(0, os.path.abspath("backend"))
 
 import pytest
 from fastapi.testclient import TestClient
-from app.main import app
+from app import main as app_module
+
+app = app_module.app
 
 client = TestClient(app)
 
@@ -170,14 +172,18 @@ def test_autofix_deduplicates_figure_captions():
     assert "# Задание" not in fixed4
     assert "Для достижения цели поставлены задачи:" in fixed4.replace("\xa0", " ")
 
-def test_spa_index_html_not_cached():
+def test_spa_index_html_not_cached(tmp_path, monkeypatch):
     # Serve index.html with no-store to avoid pinning stale bundles.
+    (tmp_path / "index.html").write_text("<!doctype html><div id=\"root\"></div>", encoding="utf-8")
+    monkeypatch.setattr(app_module, "frontend_dist", str(tmp_path))
     res = client.get("/some-frontend-route")
     assert res.status_code == 200
     assert res.headers.get("cache-control") == "no-store"
 
-def test_spa_path_traversal_prevention():
+def test_spa_path_traversal_prevention(tmp_path, monkeypatch):
     # The SPA route must not expose backend source files.
+    (tmp_path / "index.html").write_text("<!doctype html><div id=\"root\"></div>", encoding="utf-8")
+    monkeypatch.setattr(app_module, "frontend_dist", str(tmp_path))
     res = client.get("/../../backend/app/main.py")
     assert "FastAPI Application" not in res.text
     # Unknown SPA paths fall back to index.html.

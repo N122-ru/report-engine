@@ -423,17 +423,21 @@ if os.path.exists(frontend_dist):
     if os.path.exists(assets_path):
         app.mount("/assets", StaticFiles(directory=assets_path), name="assets")
 
-    @app.get("/{full_path:path}")
-    async def serve_spa(full_path: str):
-        if full_path.startswith("api"):
-            raise HTTPException(status_code=404, detail="API endpoint not found")
-        # Prevent path traversal: resolved paths must stay inside frontend_dist.
-        safe_path = os.path.abspath(os.path.join(frontend_dist, full_path))
-        no_store = {"Cache-Control": "no-store"}
-        if not (safe_path == frontend_dist or safe_path.startswith(frontend_dist + os.sep)):
-            return FileResponse(os.path.join(frontend_dist, "index.html"), headers=no_store)
-        if os.path.exists(safe_path) and os.path.isfile(safe_path):
-            if safe_path == os.path.join(frontend_dist, "index.html"):
-                return FileResponse(safe_path, headers=no_store)
-            return FileResponse(safe_path)
-        return FileResponse(os.path.join(frontend_dist, "index.html"), headers=no_store)
+@app.get("/{full_path:path}")
+async def serve_spa(full_path: str):
+    """Serve the built SPA when available without requiring it for API startup."""
+    if full_path.startswith("api"):
+        raise HTTPException(status_code=404, detail="API endpoint not found")
+    index_path = os.path.join(frontend_dist, "index.html")
+    if not os.path.isfile(index_path):
+        raise HTTPException(status_code=404, detail="Frontend build not found")
+    # Prevent path traversal: resolved paths must stay inside frontend_dist.
+    safe_path = os.path.abspath(os.path.join(frontend_dist, full_path))
+    no_store = {"Cache-Control": "no-store"}
+    if not (safe_path == frontend_dist or safe_path.startswith(frontend_dist + os.sep)):
+        return FileResponse(index_path, headers=no_store)
+    if os.path.exists(safe_path) and os.path.isfile(safe_path):
+        if safe_path == index_path:
+            return FileResponse(safe_path, headers=no_store)
+        return FileResponse(safe_path)
+    return FileResponse(index_path, headers=no_store)

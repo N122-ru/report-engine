@@ -38,13 +38,14 @@ MCP_MUTATING_TOOLS = frozenset({
     "autofix_typography",
     "update_meta",
     "import_profile",
+    "import_docx",
     "delete_image",
     "delete_images",
     "export_report",
 })
 MCP_OPERATION_TOOLS = MCP_MUTATING_TOOLS | {"get_images"}
 
-_LOCAL_FILE_TOOL_NAMES = {"upload_image", "upload_images", "import_profile"}
+_LOCAL_FILE_TOOL_NAMES = {"upload_image", "upload_images", "import_profile", "import_docx"}
 
 _NETWORKED_TOOL_DESCRIPTIONS = {
     "upload_image": (
@@ -59,6 +60,10 @@ _NETWORKED_TOOL_DESCRIPTIONS = {
     "import_profile": (
         "Импортирует профиль дисциплины и титульного листа формата report-engine-profile версии 1. "
         "Принимает JSON-объект profile. Требует свежую meta_revision."
+    ),
+    "import_docx": (
+        "Импортирует DOCX в Markdown и изображения из base64_data. "
+        "Требует свежую snapshot_id и не изменяет реквизиты без apply_meta=true."
     ),
 }
 

@@ -16,6 +16,8 @@ import binascii
 import mimetypes
 import hashlib
 import difflib
+import zipfile
+import docx.opc.exceptions
 from markdown_it import MarkdownIt
 from typing import Dict, List, Any, Optional
 from fastapi import APIRouter, Request, Response, HTTPException, Query, Body, UploadFile, File
@@ -28,7 +30,7 @@ from .sessions import (
     MAX_IMAGES_COUNT,
     validate_session_metadata,
 )
-from .security import MAX_MARKDOWN_SIZE, validate_markdown_size
+from .security import MAX_MARKDOWN_SIZE, check_rate_limit, validate_markdown_size
 from ..models.report import ReportMetadata, GenerateOptions, ImageLayout
 from .generator import build_docx_report
 from .linter import lint_docx_document
@@ -61,6 +63,7 @@ from .agent_resources import (
     read_agent_asset, read_reference, reference_resources,
 )
 from .local_files import local_files_enabled
+from .docx_import import load_docx_input, parse_docx_bytes
 from .pdf_converter import convert_docx_to_pdf
 from .security import PDF_SEMAPHORE
 from ..version import APP_VERSION
@@ -507,6 +510,28 @@ MCP_LIVE_TOOLS = [
         }
     },
     {
+        "name": "import_docx",
+        "description": (
+            "Импортирует существующий DOCX в Markdown, прикреплённые изображения и подсказки реквизитов. "
+            "Требует свежую snapshot_id; режим append добавляет тело документа к текущему отчёту, "
+            "а apply_meta применяет распознанные реквизиты титульного листа."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": [],
+            "oneOf": [{"required": ["base64_data"]}, {"required": ["file_path"]}],
+            "properties": {
+                "base64_data": {"type": "string", "description": "DOCX в Base64"},
+                "file_path": {"type": "string", "description": "Путь к DOCX на машине сервера"},
+                "mode": {"type": "string", "enum": ["replace", "append"], "default": "replace"},
+                "apply_meta": {"type": "boolean", "default": False},
+                "expected_revision": {"type": "string"},
+                "expected_meta_revision": {"type": "string"},
+                "expected_image_revision": {"type": "string"},
+            },
+        },
+    },
+    {
         "name": "delete_image",
         "description": (
             "Удаляет неиспользуемое изображение при совпадении revision текста и image_revision; "
@@ -642,6 +667,7 @@ LIVE_REVISION_GUARDS = {
     "autofix_typography": ("revision",),
     "update_meta": ("meta_revision",),
     "import_profile": ("meta_revision",),
+    "import_docx": REVISION_FIELDS,
     "delete_image": ("revision", "image_revision"),
     "delete_images": ("revision", "image_revision"),
     "export_report": REVISION_FIELDS,
@@ -680,6 +706,112 @@ def _review_snapshot(session: SessionData, lint: Dict[str, Any]) -> Dict[str, An
     return {"markdown_content": session.content, "metadata": session.meta,
             "images": session.list_images(), **with_snapshot(revisions),
             "verify_state": session.verification.state(revisions), "lint": lint}
+
+
+async def _apply_live_docx_import(
+    session: SessionData,
+    parsed: dict[str, Any],
+    *,
+    mode: str,
+    apply_meta: bool,
+    client_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Apply one parsed DOCX to a live session after all validation succeeds."""
+    if mode not in {"replace", "append"}:
+        raise ValueError("Параметр mode должен быть replace или append")
+    imported_markdown = parsed.get("markdown", "")
+    if not isinstance(imported_markdown, str):
+        raise ValueError("Импортированный Markdown имеет некорректный формат")
+    if mode == "append" and session.content.strip() and imported_markdown.strip():
+        next_content = session.content.rstrip() + "\n\n" + imported_markdown.strip()
+    elif mode == "append":
+        next_content = session.content or imported_markdown
+    else:
+        next_content = imported_markdown
+    validate_markdown_size(next_content)
+
+    image_data = parsed.get("_image_data", [])
+    if not isinstance(image_data, list) or len(session.images) + len(image_data) > MAX_IMAGES_COUNT:
+        raise ValueError("Превышено допустимое количество изображений в сессии")
+    names = set(session.images)
+    for image in image_data:
+        if not isinstance(image, dict) or not isinstance(image.get("filename"), str):
+            raise ValueError("Импорт изображения имеет некорректный формат")
+        if image["filename"] in names:
+            raise ValueError(f"Изображение «{image['filename']}» уже прикреплено")
+        raw = image.get("data")
+        validate_image_data(raw)
+        names.add(image["filename"])
+
+    next_meta = dict(session.meta)
+    hints = parsed.get("meta_hints") or {}
+    if apply_meta:
+        if not isinstance(hints, dict):
+            raise ValueError("Подсказки реквизитов имеют некорректный формат")
+        next_meta.update(hints)
+        next_meta = validate_session_metadata(next_meta)
+
+    for image in image_data:
+        session.add_image(image["filename"], image["data"])
+    if next_content != session.content:
+        await session_manager.update_content(
+            session.token, next_content, source="mcp_agent", client_id=client_id,
+        )
+    if next_meta != session.meta:
+        await session_manager.update_meta(
+            session.token, next_meta, source="mcp_agent", client_id=client_id,
+        )
+    for image in image_data:
+        await session.broadcast({
+            "type": "image_added",
+            "source": "mcp_agent",
+            "filename": image["filename"],
+            "size": len(image["data"]),
+            "url": f"/api/session/{session.token}/images/{image['filename']}",
+            "image_revision": session.image_revision,
+            "timestamp": time.time(),
+        })
+
+    uploaded = [
+        {
+            "filename": image["filename"],
+            "size_bytes": len(image["data"]),
+            "url": f"/api/session/{session.token}/images/{image['filename']}",
+        }
+        for image in image_data
+    ]
+    return {
+        "status": "imported",
+        "mode": mode,
+        "apply_meta": apply_meta,
+        "markdown_content": session.content,
+        "metadata": session.meta,
+        "meta_hints": hints,
+        "uploaded_images": uploaded,
+        "warnings": parsed.get("warnings", []),
+        "images": session.list_images(),
+        **_session_snapshot(session),
+    }
+
+
+def _authorized_session(request: Request, query_token: Optional[str]) -> SessionData:
+    """Resolve a live session token from query or Bearer authentication."""
+    bearer_token = None
+    authorization = request.headers.get("authorization")
+    if authorization is not None:
+        scheme, separator, value = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not separator or not value.strip():
+            raise HTTPException(status_code=401, detail="Требуется токен сессии")
+        bearer_token = value.strip()
+
+    query_value = query_token.strip() if isinstance(query_token, str) else None
+    if query_value and bearer_token and query_value != bearer_token:
+        raise HTTPException(status_code=401, detail="Токены сессии не совпадают")
+    token = query_value or bearer_token
+    session = session_manager.get(token) if token else None
+    if session is None:
+        raise HTTPException(status_code=401, detail="Невалидный или отсутствующий токен сессии")
+    return session
 
 
 async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: SessionData) -> Any:
@@ -1130,6 +1262,23 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
             "meta_revision": session.meta_revision,
         }
 
+    elif tool_name == "import_docx":
+        _check_expected_snapshot(args, session, REVISION_FIELDS)
+        if "file_path" in args:
+            _require_local_file_access("передайте DOCX через base64_data")
+        raw_docx = await asyncio.to_thread(
+            load_docx_input, args, allow_file_path=local_files_enabled(),
+        )
+        parsed = await asyncio.to_thread(
+            parse_docx_bytes, raw_docx, reserved_names=set(session.images),
+        )
+        return await _apply_live_docx_import(
+            session,
+            parsed,
+            mode=args.get("mode", "replace"),
+            apply_meta=args.get("apply_meta", False),
+        )
+
     elif tool_name == "update_image_layout":
         filename = args.get("filename", "")
         if filename not in session.images:
@@ -1411,6 +1560,59 @@ async def init_session(token: Optional[str] = Query(None)):
         "images": session.list_images(),
         "deleted": sorted(session.deleted_images)
     }
+
+
+@router.post("/api/import/docx")
+async def import_docx_endpoint(
+    request: Request,
+    file: UploadFile = File(...),
+    token: Optional[str] = Query(None),
+    client_id: Optional[str] = Query(None),
+):
+    """Parse a DOCX and attach its embedded images to an authenticated session."""
+    session = _authorized_session(request, token)
+    await check_rate_limit(request, max_requests=20, window_seconds=60)
+    if not file.filename or not file.filename.lower().endswith(".docx"):
+        raise HTTPException(status_code=400, detail="Поддерживаются только файлы формата .docx")
+
+    content = await file.read(MAX_IMAGE_SIZE + 1)
+    if len(content) > MAX_IMAGE_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Размер файла DOCX превышает лимит {MAX_IMAGE_SIZE // (1024 * 1024)} МБ",
+        )
+    try:
+        parsed = parse_docx_bytes(content, reserved_names=set(session.images))
+    except (zipfile.BadZipFile, docx.opc.exceptions.PackageNotFoundError, KeyError, ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=f"Поврежденный или невалидный файл DOCX: {exc}") from exc
+
+    image_data = parsed.pop("_image_data", [])
+    if len(session.images) + len(image_data) > MAX_IMAGES_COUNT:
+        raise HTTPException(status_code=400, detail="Превышено допустимое количество изображений в сессии")
+
+    uploaded: list[dict[str, Any]] = []
+    async with session.mcp_write_lock:
+        for image in image_data:
+            name = session.add_image(image["filename"], image["data"])
+            item = {
+                "filename": name,
+                "size_bytes": len(image["data"]),
+                "url": f"/api/session/{session.token}/images/{name}",
+            }
+            uploaded.append(item)
+            await session.broadcast({
+                "type": "image_added",
+                "source": "web",
+                "filename": name,
+                "size": len(image["data"]),
+                "url": item["url"],
+                "client_id": client_id,
+                "image_revision": session.image_revision,
+                "timestamp": time.time(),
+            })
+
+    parsed["uploaded_images"] = uploaded
+    return parsed
 
 
 @router.post("/api/session/{token}/images")

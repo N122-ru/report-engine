@@ -15,6 +15,8 @@ from fastapi.testclient import TestClient
 
 from backend.app.engine.headless_report import HeadlessReport
 from backend.app.headless import _dispatch_tool
+from backend.app.engine.generator import build_docx_report
+from backend.app.models.report import GenerateOptions, ReportMetadata
 from app.main import app
 
 
@@ -59,6 +61,84 @@ def transport(request, tmp_path, monkeypatch):
         }, **extra)
 
     return request.param, call, write, export, report, client, token
+
+
+def _docx_import_fixture() -> bytes:
+    """Build a small DOCX with body content and title hints for MCP tests."""
+    return build_docx_report(
+        ReportMetadata(
+            work_type="о выполнении лабораторной работы",
+            work_number=3,
+            work_theme="Импорт из документа",
+            discipline="Инженерная дисциплина",
+        ),
+        "# Цель работы\nПроверка импорта.",
+        options=GenerateOptions(),
+    ).getvalue()
+
+
+def test_import_docx_is_revision_guarded_and_idempotent(transport):
+    _, call, _, _, _, _, _ = transport
+    state_error, state = call("get_report_state")
+    assert not state_error
+    encoded = base64.b64encode(_docx_import_fixture()).decode("ascii")
+
+    error, imported = call(
+        "import_docx",
+        base64_data=encoded,
+        mode="replace",
+        apply_meta=True,
+        expected_snapshot_id=state["snapshot_id"],
+        operation_id="docx-import-once",
+    )
+    assert not error, imported
+    assert imported["status"] == "imported"
+    assert imported["metadata"]["work_theme"] == "Импорт из документа"
+    assert imported["markdown_content"].startswith("# Цель работы")
+
+    error, replayed = call(
+        "import_docx",
+        base64_data=encoded,
+        mode="replace",
+        apply_meta=True,
+        expected_snapshot_id=state["snapshot_id"],
+        operation_id="docx-import-once",
+    )
+    assert not error
+    assert replayed == imported
+
+
+def test_import_docx_rejects_stale_revision_without_changing_report(transport):
+    _, call, _, _, _, _, _ = transport
+    _, state = call("get_report_state")
+    encoded = base64.b64encode(_docx_import_fixture()).decode("ascii")
+    error, message = call(
+        "import_docx",
+        base64_data=encoded,
+        expected_snapshot_id="stale-snapshot",
+    )
+    assert error
+    assert "Конфликт версий" in message
+    _, after = call("get_report_state")
+    assert after["markdown_content"] == state["markdown_content"]
+
+
+def test_import_docx_file_source_follows_transport_policy(transport):
+    name, call, _, _, report, _, _ = transport
+    path = report.output_dir / "source.docx"
+    path.write_bytes(_docx_import_fixture())
+    _, state = call("get_report_state")
+    error, result = call(
+        "import_docx",
+        file_path=str(path),
+        expected_snapshot_id=state["snapshot_id"],
+    )
+    if name == "headless":
+        assert not error, result
+        assert result["markdown_content"].startswith("# Цель работы")
+    else:
+        assert error
+        assert "только в автономных сборках" in result
 
 
 @pytest.mark.parametrize("text, kind", [
@@ -717,14 +797,14 @@ def test_live_and_headless_share_the_common_tool_names(transport):
         capabilities = json.loads(capabilities["content"][0]["text"])
     else:
         live_names = {"batch", "list_images", "get_image", "get_images", "upload_image",
-                      "upload_images", "get_report_state", "append_or_update_section",
-                      "update_meta", "delete_image", "lint_report", "autofix_typography",
-                      "import_profile", "get_capabilities", "review_snapshot", "export_report"}
+                       "upload_images", "get_report_state", "append_or_update_section",
+                       "update_meta", "delete_image", "lint_report", "autofix_typography",
+                       "import_profile", "import_docx", "get_capabilities", "review_snapshot", "export_report"}
         error, capabilities = transport[1]("get_capabilities")
         assert not error
     common = {"batch", "list_images", "get_image", "get_images", "upload_image",
-              "upload_images", "get_report_state", "append_or_update_section", "update_meta",
-              "delete_image", "lint_report", "autofix_typography", "import_profile",
+               "upload_images", "get_report_state", "append_or_update_section", "update_meta",
+               "delete_image", "lint_report", "autofix_typography", "import_profile", "import_docx",
               "get_capabilities", "review_snapshot", "export_report"}
     assert common <= live_names
     assert common <= headless_names

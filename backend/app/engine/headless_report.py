@@ -22,6 +22,7 @@ from .typography import apply_typography_rules, strip_trailing_dot
 from .profile import profile_metadata, validate_profile
 from .image_input import MAX_IMAGE_SIZE, MAX_IMAGES_COUNT, validate_image_data
 from .image_refs import resolve_image_name
+from .docx_import import parse_docx_bytes
 from .section_editor import normalize_section_heading
 from .report_safety import (
     MAX_MARKDOWN_BYTES, OperationCache, ReportVerification, add_content_guards,
@@ -348,6 +349,89 @@ class HeadlessReport:
         result = self.get_report_state()
         result["profile_subject"] = validated["subject"]
         return result
+
+    def import_docx(
+        self,
+        data: bytes,
+        mode: str = "replace",
+        apply_meta: bool = False,
+        *,
+        expected_revision: str | None = None,
+        expected_meta_revision: str | None = None,
+        expected_image_revision: str | None = None,
+        expected_snapshot_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Import DOCX body, embedded images, and optional title hints atomically."""
+        if mode not in {"replace", "append"}:
+            raise ValueError("Параметр mode должен быть replace или append")
+        if not isinstance(apply_meta, bool):
+            raise ValueError("Параметр apply_meta должен быть логическим значением")
+        if self.metadata is not None:
+            self._check_expected(
+                expected_snapshot_id,
+                {
+                    "revision": expected_revision,
+                    "meta_revision": expected_meta_revision,
+                    "image_revision": expected_image_revision,
+                },
+            )
+        parsed = parse_docx_bytes(data, reserved_names=set(self.images))
+        imported_markdown = parsed["markdown"]
+        if mode == "append" and self.content.strip() and imported_markdown.strip():
+            next_content = self.content.rstrip() + "\n\n" + imported_markdown.strip()
+        elif mode == "append":
+            next_content = self.content or imported_markdown
+        else:
+            next_content = imported_markdown
+        if len(next_content.encode("utf-8")) > MAX_MARKDOWN_BYTES:
+            raise ValueError("Размер текста отчёта превышает 500 КБ")
+
+        image_data = parsed.get("_image_data", [])
+        if len(self.images) + len(image_data) > MAX_IMAGES_COUNT:
+            raise ValueError("Превышено допустимое количество изображений")
+        names = set(self.images)
+        for image in image_data:
+            name = image.get("filename") if isinstance(image, dict) else None
+            if not isinstance(name, str) or name in names:
+                raise ValueError(f"Изображение «{name}» уже прикреплено")
+            self._validate_image_data(image.get("data"))
+            names.add(name)
+
+        current_metadata = self.metadata or ReportMetadata()
+        next_metadata: ReportMetadata = current_metadata
+        hints = parsed.get("meta_hints") or {}
+        if apply_meta:
+            if not isinstance(hints, dict):
+                raise ValueError("Подсказки реквизитов имеют некорректный формат")
+            next_metadata = self._validate_metadata({**current_metadata.model_dump(), **hints})
+        metadata_changed = self.metadata is None or next_metadata != self.metadata
+        content_changed = next_content != self.content
+        for image in image_data:
+            self._store_image(image["filename"], image["data"], "", False)
+        if content_changed:
+            self.content = next_content
+        if metadata_changed:
+            self.metadata = next_metadata
+        if content_changed or metadata_changed:
+            self.verification.changed()
+            self._invalidate_revisions()
+
+        uploaded = [
+            {"filename": image["filename"], "size_bytes": len(image["data"])}
+            for image in image_data
+        ]
+        return {
+            "status": "imported",
+            "mode": mode,
+            "apply_meta": apply_meta,
+            "markdown_content": self.content,
+            "metadata": self.metadata.model_dump(),
+            "meta_hints": hints,
+            "uploaded_images": uploaded,
+            "warnings": parsed.get("warnings", []),
+            "images": self.list_images(),
+            **self._revisions(),
+        }
 
     def append_or_update_section(
         self, section_heading: str, section_content: str, expected_revision: str | None = None,

@@ -17,11 +17,11 @@ LIVE_TOOL_NAMES = frozenset({
     "update_image_layout", "get_report_state", "append_or_update_section", "patch_text",
     "apply_patches", "get_document_outline", "replace_block", "delete_block", "move_figure",
     "get_last_edit", "get_edit_history", "rollback_last_edit", "lint_report",
-    "autofix_typography", "update_meta", "delete_image", "delete_images", "import_profile",
+    "autofix_typography", "update_meta", "delete_image", "delete_images", "import_profile", "import_docx",
     "get_capabilities", "review_snapshot", "export_report",
 })
 HEADLESS_TOOL_NAMES = frozenset({
-    "batch", "create_report", "import_profile", "get_report_state", "get_capabilities",
+    "batch", "create_report", "import_profile", "import_docx", "get_report_state", "get_capabilities",
     "review_snapshot", "list_images", "get_image", "get_images", "upload_image", "upload_images",
     "append_or_update_section", "update_meta", "delete_image", "lint_report",
     "autofix_typography", "export_report",

@@ -339,7 +339,7 @@ def lint_docx_document(
                 fix_suggestion="Опишите результат без упоминания путей и служебных папок"
             ))
 
-    # Numeric ranges in prose use an em dash; protected technical text is
+    # Numeric ranges in prose use an en dash; protected technical text is
     # excluded by find_numeric_range_hyphens before matching.
     numeric_source = source_markdown if source_markdown is not None else "\n".join(reference_paragraphs)
     for range_text in find_numeric_range_hyphens(numeric_source):

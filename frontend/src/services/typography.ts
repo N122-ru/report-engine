@@ -12,6 +12,30 @@ export const NB_HYPHEN = '\u2011';
 const W = 'а-яёА-ЯЁa-zA-Z0-9_';
 const NOT_W_BEFORE = `(?<=^|[^${W}])`;
 const NOT_W_AFTER = `(?![${W}])`;
+const NUMERIC_RANGE_RE = new RegExp(
+  `(?<![${W}.:])(?:\\d{1,2}:\\d{2}-\\d{1,2}:\\d{2}|\\d+(?:[.,]\\d+)?-\\d+(?:[.,]\\d+)?)(?![${W}-])`,
+  'g',
+);
+const PROTECTED_RANGE_RE = new RegExp(
+  `(?:${NOT_W_BEFORE}(?:ГОСТ|СТО|ОСТ)\\s+Р?\\s*(?:\\d+(?:[.,]\\d+)*\\s+)?\\d+(?:[.,]\\d+)*-\\d+${NOT_W_AFTER}`
+    + `|${NOT_W_BEFORE}Р\\s+(?:\\d+(?:[.,]\\d+)*\\s+)?\\d+(?:[.,]\\d+)*-\\d+${NOT_W_AFTER}`
+    + '|\\b(?:https?|ftp)://[^\\s<>()]+'
+    + `|(?<![${W}])[^\\s<>()\\[\\]]*[\\\\/][^\\s<>()\\[\\]]*`
+    + `|(?<![${W}])v?\\d+(?:\\.\\d+){2,}(?:[-+][\\w.-]+)?)`,
+  'giu',
+);
+
+function replaceNumericRanges(input: string): string {
+  let result = '';
+  let cursor = 0;
+  for (const match of input.matchAll(PROTECTED_RANGE_RE)) {
+    const index = match.index ?? cursor;
+    result += input.slice(cursor, index).replace(NUMERIC_RANGE_RE, value => value.replace('-', '–'));
+    result += match[0];
+    cursor = index + match[0].length;
+  }
+  return result + input.slice(cursor).replace(NUMERIC_RANGE_RE, value => value.replace('-', '–'));
+}
 
 export function applyTypographyRules(input: string): string {
   if (!input) return input;
@@ -46,6 +70,9 @@ export function applyTypographyRules(input: string): string {
     new RegExp(`(\\d+)\\s+(мм|см|м|км|мс|с|мин|ч|байт|КБ|МБ|ГБ|бит|кбит|Мбит|Гбит|Гц|кГц|МГц|ГГц|В|А|Вт|кВт|pt|dxa|г\\.|года)${NOT_W_AFTER}`, 'g'),
     `$1${NBSP}$2`
   );
+
+  // Use an en dash for numeric and time ranges; technical literals stay unchanged.
+  text = replaceNumericRanges(text);
 
   // Convert paired straight quotation marks to guillemets.
   text = text.replace(/[“„]([^”„\n]+?)[”"]/g, '«$1»');

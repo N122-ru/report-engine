@@ -8,12 +8,14 @@ NBSP = '\u00a0'
 NB_HYPHEN = '\u2011'
 
 _NUMERIC_RANGE_RE = re.compile(
-    r'(?<![\w.-])\d+(?:[.,]\d+)?-(?:\d+(?:[.,]\d+)?)(?![\w-])'
+    r'(?<![\w.:])(?:\d{1,2}:\d{2}-\d{1,2}:\d{2}|\d+(?:[.,]\d+)?-\d+(?:[.,]\d+)?)(?![\w-])'
 )
 _PROTECTED_RANGE_RE = re.compile(
     r'(?ix)'
-    r'\b(?:https?|ftp)://[^\s<>()]+'
-    r'|(?<!\S)[^\s<>()\[\]]*[\\/][^\s<>()\[\]]*'
+    r'(?<![\w])(?:гост|сто|ост)\s+р?\s*(?:\d+(?:[.,]\d+)*\s+)?\d+(?:[.,]\d+)*-\d+(?![\w-])'
+    r'|(?<![\w])р\s+(?:\d+(?:[.,]\d+)*\s+)?\d+(?:[.,]\d+)*-\d+(?![\w-])'
+    r'|\b(?:https?|ftp)://[^\s<>()]+'
+    r'|(?<![\w])[^\s<>()\[\]]*[\\/][^\s<>()\[\]]*'
     r'|(?<![\w])v?\d+(?:\.\d+){2,}(?:[-+][\w.-]+)?'
 )
 
@@ -55,24 +57,47 @@ def _prose_segments(markdown: str) -> list[str]:
 def find_numeric_range_hyphens(markdown: str) -> list[str]:
     """Find ASCII hyphens used between numbers in prose text.
 
-    Markdown code, URLs, file paths, and semantic-version-like values are
-    masked before matching because they use hyphens as syntax or data.
+    Markdown code, URLs, file paths, semantic-version-like values, and standard
+    designations are excluded because their hyphens are literal data.
     """
     matches = []
     for segment in _prose_segments(markdown):
-        masked = list(segment)
-        for protected in _PROTECTED_RANGE_RE.finditer(segment):
-            for index in range(protected.start(), protected.end()):
-                masked[index] = " "
-        matches.extend(match.group(0) for match in _NUMERIC_RANGE_RE.finditer("".join(masked)))
+        for unprotected in _unprotected_segments(segment):
+            matches.extend(match.group(0) for match in _NUMERIC_RANGE_RE.finditer(unprotected))
     return matches
+
+
+def _unprotected_segments(text: str) -> list[str]:
+    """Split prose around technical literals that must retain ASCII hyphens."""
+    segments = []
+    cursor = 0
+    for protected in _PROTECTED_RANGE_RE.finditer(text):
+        if protected.start() > cursor:
+            segments.append(text[cursor:protected.start()])
+        cursor = protected.end()
+    segments.append(text[cursor:])
+    return segments
+
+
+def _replace_numeric_ranges(text: str) -> str:
+    """Use an en dash in unprotected numeric and time ranges."""
+    parts = []
+    cursor = 0
+    for protected in _PROTECTED_RANGE_RE.finditer(text):
+        unprotected = text[cursor:protected.start()]
+        parts.append(_NUMERIC_RANGE_RE.sub(lambda match: match.group(0).replace('-', '–'), unprotected))
+        parts.append(protected.group(0))
+        cursor = protected.end()
+    parts.append(_NUMERIC_RANGE_RE.sub(lambda match: match.group(0).replace('-', '–'), text[cursor:]))
+    return ''.join(parts)
 
 def apply_typography_rules(text: str) -> str:
     """Apply Russian typography rules under GOST 7.32-2017.
 
     Bind short prepositions/conjunctions, numbered references, and measurement
-    units with nonbreaking spaces. Normalize word-separating dashes and paired
-    quotation marks, and keep technical hyphenated terms together.
+    units with nonbreaking spaces. Normalize word-separating dashes, numeric
+    ranges, and paired quotation marks, and keep technical hyphenated terms
+    together.
     """
     if not text:
         return text
@@ -101,6 +126,9 @@ def apply_typography_rules(text: str) -> str:
 
     # Bind numbers to measurement units and year suffixes.
     text = re.sub(r'(\d+)\s+(мм|см|м|км|мс|с|мин|ч|байт|КБ|МБ|ГБ|бит|кбит|Мбит|Гбит|Гц|кГц|МГц|ГГц|В|А|Вт|кВт|pt|dxa|г\.|года)(?!\w)', rf'\g<1>{NBSP}\g<2>', text)
+
+    # Use an en dash for numeric and time ranges; technical literals stay unchanged.
+    text = _replace_numeric_ranges(text)
 
     # Convert paired quotation marks to guillemets without changing
     # unpaired inch marks such as 15" or 2.5".

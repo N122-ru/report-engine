@@ -197,6 +197,21 @@ def test_autofix_idempotent():
         twice = client.post("/api/autofix", data={"content": once}).json()
         assert twice["fixes_applied"] == []
 
+
+def test_autofix_converts_numeric_and_time_ranges_without_touching_standards_or_minus():
+    content = (
+        "Диапазоны 3-5 и 10:00-11:00. ГОСТ 7.32-2017. Значение −5−3. "
+        "URL https://example.org/file-3-5.txt, путь /tmp/file-10-20.txt, версия v1.2.3-4."
+    )
+
+    response = client.post("/api/autofix", data={"content": content})
+
+    assert response.status_code == 200
+    assert response.json()["fixed_content"] == (
+        "Диапазоны 3–5 и\u00a010:00–11:00. ГОСТ 7.32-2017. Значение −5−3. "
+        "URL https://example.org/file-3-5.txt, путь /tmp/file-10-20.txt, версия v1.2.3-4."
+    )
+
 def test_autofix_converges_after_multiple_duplicate_captions():
     content = "![image.png](image.png)\nРисунок 1: Архитектура\nРисунок 1: Архитектура"
     once = client.post("/api/autofix", data={"content": content}).json()

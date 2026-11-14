@@ -348,6 +348,17 @@ def test_autofix_and_lint_are_in_memory(report):
     assert "score" in result
 
 
+def test_headless_autofix_preserves_multi_backtick_code(report):
+    """Verify headless typography preserves code spans with repeated backticks."""
+    report.create_report()
+    add_section(report, "# Текст", "Литерал ``3-5`` не менять.")
+    state = report.get_report_state()
+
+    report.autofix_typography(state["revision"])
+
+    assert "Литерал ``3-5`` не менять." in report.get_report_state()["markdown_content"]
+
+
 def test_lint_report_warns_for_unknown_reference_keys(report):
     """Verify lint_report exposes reference fields ignored by the renderer."""
     report.create_report({

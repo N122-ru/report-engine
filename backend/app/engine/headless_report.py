@@ -18,7 +18,7 @@ from .generator import build_docx_report
 from .linter import lint_docx_document
 from .pdf_converter import convert_docx_to_pdf
 from .markdown_parser import _image_size
-from .typography import apply_typography_rules, strip_trailing_dot
+from .typography import apply_typography_outside_code, strip_trailing_dot
 from .profile import profile_metadata, validate_profile
 from .image_input import MAX_IMAGE_SIZE, MAX_IMAGES_COUNT, validate_image_data
 from .image_refs import resolve_image_name
@@ -488,11 +488,7 @@ class HeadlessReport:
             elif re.match(r"^#{1,6}\s+", line):
                 fixed_lines.append(strip_trailing_dot(line))
             else:
-                parts = re.split(r"(`[^`\n]*`)", line)
-                fixed_lines.append("".join(
-                    part if part.startswith("`") else apply_typography_rules(part)
-                    for part in parts
-                ))
+                fixed_lines.append(apply_typography_outside_code(line))
         fixed = "\n".join(fixed_lines)
         if len(fixed.encode("utf-8")) > MAX_MARKDOWN_BYTES:
             raise ValueError("Размер текста отчёта превышает 500 КБ")

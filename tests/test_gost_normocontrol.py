@@ -8,7 +8,12 @@ from docx.oxml.ns import qn
 from app.models.report import ReportMetadata, StudentInfo, TeacherInfo
 from app.engine.generator import build_docx_report
 from app.engine.linter import lint_docx_document
-from app.engine.typography import apply_typography_rules, clean_figure_caption, clean_table_caption
+from app.engine.typography import (
+    apply_typography_rules,
+    clean_figure_caption,
+    clean_table_caption,
+    find_numeric_range_hyphens,
+)
 
 
 def test_invalid_custom_logo_data_url_does_not_break_docx_generation():
@@ -721,6 +726,29 @@ def test_linter_ignores_numeric_hyphens_in_protected_text():
     res = lint_docx_document(build_docx_report(ReportMetadata(), md), source_markdown=md)
 
     assert not [w for w in res.warnings if w.type == "PUNCTUATION"]
+
+
+def test_numeric_ranges_protect_time_ranges_and_standard_designations():
+    md = (
+        "ГОСТ 7.32-2017, ГОСТ Р 7.0.5-2008, СТО 1.2-3, "
+        "ОСТ 1-2, ОСТ 1 02534-84, Р 7.0-5 и 10:00-11:00; диапазон 3-5. "
+        "Путь (images/file-10-20.txt)."
+    )
+
+    assert find_numeric_range_hyphens(md) == ["10:00-11:00", "3-5"]
+    assert apply_typography_rules(md) == (
+        "ГОСТ 7.32-2017, ГОСТ Р 7.0.5-2008, СТО 1.2-3, "
+        "ОСТ 1-2, ОСТ 1 02534-84, Р 7.0-5 и\u00a0"
+        "10:00–11:00; диапазон 3–5. Путь (images/file-10-20.txt)."
+    )
+
+
+def test_linter_reports_time_and_numeric_ranges_but_not_standard_designations():
+    md = "ГОСТ 7.32-2017 и 10:00-11:00; допустимый диапазон 3-5."
+    result = lint_docx_document(build_docx_report(ReportMetadata(), md), source_markdown=md)
+
+    range_texts = [w.message.split("«")[1].split("»")[0] for w in result.warnings if w.type == "PUNCTUATION"]
+    assert range_texts == ["10:00-11:00", "3-5"]
 
 
 def test_figure_duplicate_caption_absorption():

@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { deleteStoredImage, deleteStoredImageByName, deleteStoredImageFile, getStoredImages, saveStoredImage } from './imageStore.ts';
+import { clearStoredImages, deleteStoredImage, deleteStoredImageByName, deleteStoredImageFile, getStoredImages, saveStoredImage } from './imageStore.ts';
 
 test('stores original bytes and manifest across reads', async () => {
   const file = new File(['original bytes'], 'Схема сети.png', {
@@ -76,5 +76,12 @@ test('remote deletion refuses ambiguous local originals', async () => {
 test('remote deletion removes an unambiguous browser filename alias', async () => {
   await saveStoredImage(new File(['original'], 'Два слова.png', { type: 'image/png' }));
   await deleteStoredImageByName('Два_слова.png');
+  assert.deepEqual(await getStoredImages(), []);
+});
+
+test('clears every browser original for a new report', async () => {
+  await saveStoredImage(new File(['one'], 'one.png', { type: 'image/png' }));
+  await saveStoredImage(new File(['two'], 'two.png', { type: 'image/png' }));
+  await clearStoredImages();
   assert.deepEqual(await getStoredImages(), []);
 });

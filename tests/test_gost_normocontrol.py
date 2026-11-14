@@ -279,7 +279,7 @@ def test_title_page_geometry_and_samara_position(tmp_path):
             y2_samara = y2
 
     assert y2_samara is not None, "'Самара' must be on page 1"
-    assert 750.0 <= y2_samara <= 785.2, f"Samara yMax={y2_samara:.1f}pt is out of bottom range [750, 785.2]"
+    assert 790.0 <= y2_samara <= 820.0, f"Samara yMax={y2_samara:.1f}pt is out of first-page footer range [790, 820]"
 
 def test_no_title_page_option():
     from app.models.report import GenerateOptions
@@ -948,8 +948,9 @@ def test_logo_mode_none_generates_clean_title_page():
     doc = docx.Document(bio)
 
     full_text = "\n".join(p.text for p in doc.paragraphs)
+    footer_text = "\n".join(p.text for section in doc.sections for p in section.first_page_footer.paragraphs)
     assert meta.university in full_text
-    assert "Москва" in full_text
+    assert "Москва" in footer_text
     # The title page must not contain an anchored logo.
     anchors = doc.paragraphs[0]._p.xpath('.//*[local-name()="anchor"]')
     assert len(anchors) == 0

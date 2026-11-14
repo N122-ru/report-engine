@@ -1,8 +1,11 @@
 import io
 import base64
 import json
+import socket
 import subprocess
 import sys
+import time
+from urllib.request import Request, urlopen
 
 import pytest
 from docx import Document
@@ -44,6 +47,71 @@ def test_headless_core_does_not_import_fastapi():
         capture_output=True, text=True, timeout=10,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_headless_streamable_http_runtime_keeps_state_between_requests(tmp_path):
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    process = subprocess.Popen(
+        [sys.executable, "-m", "backend.app.headless", "--output-dir", str(tmp_path),
+         "--http", f"127.0.0.1:{port}"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+
+    session_id = None
+
+    def post(payload):
+        nonlocal session_id
+        request = Request(
+            f"http://127.0.0.1:{port}/mcp",
+            data=json.dumps(payload).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                **({"Mcp-Session-Id": session_id} if session_id else {}),
+            },
+            method="POST",
+        )
+        with urlopen(request, timeout=1) as response:
+            session_id = response.headers.get("Mcp-Session-Id", session_id)
+            return response.status, json.loads(response.read())
+
+    try:
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                status, initialized = post({
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-03-26",
+                        "capabilities": {},
+                        "clientInfo": {"name": "pytest", "version": "1"},
+                    },
+                })
+                break
+            except Exception:
+                if time.monotonic() >= deadline:
+                    process.terminate()
+                    raise AssertionError("headless HTTP server did not start")
+                time.sleep(0.05)
+        assert status == 200
+        assert initialized["result"]["serverInfo"]["name"] == "report-engine-headless"
+
+        _, created = post({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                           "params": {"name": "create_report", "arguments": {"metadata": {"work_theme": "HTTP"}}}})
+        assert created["result"]["isError"] is False
+        _, state = post({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                         "params": {"name": "get_report_state", "arguments": {}}})
+        state_payload = json.loads(state["result"]["content"][0]["text"])
+        assert state_payload["metadata"]["work_theme"] == "HTTP"
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
 
 
 def test_creation_keeps_state_in_memory_and_cannot_reset(report, tmp_path):

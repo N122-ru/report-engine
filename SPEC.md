@@ -153,7 +153,9 @@ standards compliance or institution-specific requirements.
 
 ## Headless MCP and Portable Profiles
 
-- Headless is a separate stdio process with one RAM report, no browser or HTTP server.
+- Headless is a separate process with one RAM report. It supports stdio and an
+  optional stateful Streamable HTTP endpoint at `/mcp` selected by `--http HOST:PORT`;
+  stdio remains the default.
   It exposes content/metadata/media editing, linting, profile import, and explicit export.
   Fresh text, metadata, and image revisions, or one atomic snapshot, protect writes and exports.
 - Headless export is restricted to a new simple filename in the pre-existing
@@ -308,7 +310,8 @@ convenience launchers: `start-web.sh` / `start-web.bat`.
   profile import/export behavior described in the product spec.
 - Enable server-local `file_path` sources at startup: this launcher runs on the
   user's machine, unlike Docker or source web, which stay base64-only.
-- Also expose **live SSE MCP** at `/api/mcp/sse?token=...`; use the browser MCP
+- Also expose **live SSE MCP** at `/api/mcp/sse?token=...` and authenticated
+  Streamable HTTP JSON-RPC at `POST /api/mcp`; use the browser MCP
   modal for session configuration. This executable is not a stdio MCP server
   and does not depend on the headless process.
 - Keep text/metadata in browser localStorage, images in IndexedDB, and server

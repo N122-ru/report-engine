@@ -756,6 +756,7 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
             "message": "Отчёт очищен, реквизиты и ревизии возвращены к значениям свежей сессии",
             "metadata": session.meta,
             "markdown_content": session.content,
+            **_session_snapshot(session),
         }
 
     if tool_name == "get_capabilities":

@@ -244,24 +244,19 @@ def add_title_page(doc: Document, meta: ReportMetadata):
     title_fixed = 1180 + (theme_lines * 300)
     person_row_height = 750
     table_dxa = num_persons * person_row_height
-    footer_dxa = 240
-
-    fixed_dxa = header_dxa + title_fixed + table_dxa + footer_dxa
+    fixed_dxa = header_dxa + title_fixed + table_dxa
     target_total = 14250 - max(0, num_persons - 2) * 150 - max(0, theme_lines - 1) * 120
     avail_dxa = max(0, target_total - fixed_dxa)
 
     if avail_dxa > 1000:
         gap1 = int(avail_dxa * 0.30)
         gap2 = int(avail_dxa * 0.32)
-        gap3 = max(180, avail_dxa - gap1 - gap2)
     elif avail_dxa > 0:
         gap1 = max(100, int(avail_dxa * 0.30))
         gap2 = max(100, int(avail_dxa * 0.32))
-        gap3 = max(140, avail_dxa - gap1 - gap2)
     else:
         gap1 = 40
         gap2 = 40
-        gap3 = 60
 
     # -------------------------------------------------------------
     # Report heading block.
@@ -404,13 +399,21 @@ def add_title_page(doc: Document, meta: ReportMetadata):
         current_row += 2
 
     # -------------------------------------------------------------
-    # Footer: city and year without a year abbreviation.
+    # LibreOffice and Word render a first-page footer consistently, while
+    # framePr bottom alignment is not stable across their PDF converters.
+    # The first-page footer is unlinked from later sections by the generator,
+    # so this remains title-page text rather than a report-wide footer.
     # -------------------------------------------------------------
     if meta.year is not None:
-        p_footer = doc.add_paragraph()
+        title_section = doc.sections[0]
+        title_section.different_first_page_header_footer = True
+        title_footer = title_section.first_page_footer
+        title_footer.is_linked_to_previous = False
+        p_footer = title_footer.paragraphs[0]
+        p_footer.text = ""
         p_footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
         p_footer_pr = p_footer._p.get_or_add_pPr()
-        p_footer_pr.append(parse_xml(f'<w:spacing {nsdecls("w")} w:before="{gap3}" w:after="0" w:line="240" w:lineRule="auto"/>'))
+        p_footer_pr.append(parse_xml(f'<w:spacing {nsdecls("w")} w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>'))
         p_footer_pr.append(parse_xml(f'<w:ind {nsdecls("w")} w:firstLine="0" w:left="0" w:right="0"/>'))
         clean_city = re.sub(r"^\s*г\.\s*|^\s*г\s+", "", (meta.city or "").strip(), flags=re.IGNORECASE)
         clean_city = re.sub(r"[\s,]+г\.?\s*$", "", clean_city, flags=re.IGNORECASE).strip() or "Город"

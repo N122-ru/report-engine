@@ -719,6 +719,8 @@ async def _apply_live_docx_import(
     """Apply one parsed DOCX to a live session after all validation succeeds."""
     if mode not in {"replace", "append"}:
         raise ValueError("Параметр mode должен быть replace или append")
+    if not isinstance(apply_meta, bool):
+        raise ValueError("Параметр apply_meta должен быть логическим значением")
     imported_markdown = parsed.get("markdown", "")
     if not isinstance(imported_markdown, str):
         raise ValueError("Импортированный Markdown имеет некорректный формат")

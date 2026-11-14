@@ -141,6 +141,21 @@ def test_import_docx_file_source_follows_transport_policy(transport):
         assert "только в автономных сборках" in result
 
 
+def test_import_docx_rejects_invalid_mode_and_metadata_flag(transport):
+    _, call, _, _, _, _, _ = transport
+    _, state = call("get_report_state")
+    encoded = base64.b64encode(_docx_import_fixture()).decode("ascii")
+    error, message = call(
+        "import_docx",
+        base64_data=encoded,
+        mode="merge",
+        apply_meta="yes",
+        expected_snapshot_id=state["snapshot_id"],
+    )
+    assert error
+    assert "mode должен быть replace или append" in message
+
+
 @pytest.mark.parametrize("text, kind", [
     ("На скриншоте данной информации нет.", "placeholder"),
     ("Данных нет.", "placeholder"),

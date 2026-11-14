@@ -5,8 +5,43 @@ export { getVersionInfo } from './update.ts';
 export type { VersionInfo } from './update.ts';
 export { getRuntimeCapabilities } from './capabilities.ts';
 export type { RuntimeCapabilities } from './capabilities.ts';
+import { getClientId } from './session.ts';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
+
+export interface DocxImportResponse {
+  markdown: string;
+  uploaded_images: Array<{ filename: string; size_bytes: number; url: string }>;
+  meta_hints: Partial<ReportMetadata>;
+  warnings: string[];
+}
+
+export async function importDocx(token: string, file: File): Promise<DocxImportResponse> {
+  if (!token) throw new Error('Сессия не инициализирована');
+  const formData = new FormData();
+  formData.append('file', file);
+  const params = new URLSearchParams({ token, client_id: getClientId() });
+  const response = await fetchWithTimeout(`${API_BASE}/api/import/docx?${params.toString()}`, {
+    method: 'POST',
+    body: formData,
+  }, 60_000);
+  if (!response.ok) {
+    let message = `Не удалось импортировать DOCX (${response.status})`;
+    try {
+      const payload = await response.json();
+      message = formatApiError(payload, message);
+    } catch {
+      // Keep the status fallback when the server did not return JSON.
+    }
+    throw new Error(message);
+  }
+  const result = await response.json() as DocxImportResponse;
+  if (typeof result.markdown !== 'string' || !Array.isArray(result.uploaded_images)
+    || !result.meta_hints || !Array.isArray(result.warnings)) {
+    throw new Error('Сервер вернул некорректный результат импорта DOCX');
+  }
+  return result;
+}
 
 function formatApiError(errData: any, fallbackMsg: string): string {
   if (!errData) return fallbackMsg;

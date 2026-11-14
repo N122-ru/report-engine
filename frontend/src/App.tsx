@@ -12,7 +12,7 @@ import { ReportMetadata } from './types';
 import { EditorSelection } from './services/editorInsertion';
 import { extractMarkdownImageSources } from './services/markdown';
 import { isExternalImageRef, resolveImageName } from './services/imageRefs';
-import { generateDocument, autofixMarkdown, getRuntimeCapabilities, getVersionInfo, type VersionInfo } from './services/api';
+import { generateDocument, autofixMarkdown, getRuntimeCapabilities, getVersionInfo, importDocx, type VersionInfo } from './services/api';
 import { 
   initSession, 
   syncSessionToServer, 
@@ -1274,6 +1274,46 @@ export const App: React.FC = () => {
     showToast("Ответ ИИ импортирован");
   };
 
+  const handleImportDocx = async (file: File, mode: 'replace' | 'append', applyMeta: boolean): Promise<void> => {
+    const token = activeTokenRef.current || sessionToken;
+    if (!token) throw new Error('Сессия не инициализирована');
+    const result = await importDocx(token, file);
+    const previousContent = contentRef.current;
+    const nextContent = mode === 'append' && previousContent.trim() && result.markdown.trim()
+      ? `${previousContent.trimEnd()}\n\n${result.markdown.trim()}`
+      : mode === 'append' ? (previousContent || result.markdown) : result.markdown;
+    const headingSignature = (value: string): string[] => value
+      .split('\n')
+      .map(line => line.match(/^(#{1,6})\s+(.+?)\s*$/))
+      .filter((match): match is RegExpMatchArray => match !== null)
+      .map(match => `${match[1]} ${match[2]}`);
+    const structureChanged = mode === 'append' && previousContent.trim()
+      && headingSignature(previousContent).join('\n') !== headingSignature(result.markdown).join('\n');
+
+    contentRef.current = nextContent;
+    setContent(nextContent);
+    if (applyMeta && Object.keys(result.meta_hints).length > 0) {
+      const nextMeta = { ...metaRef.current, ...result.meta_hints } as ReportMetadata;
+      metaRef.current = nextMeta;
+      setMeta(nextMeta);
+    }
+
+    const manifest = await getSessionImages(token);
+    if (manifest.image_revision) imageRevisionRef.current = manifest.image_revision;
+    await recoverSessionImages(token, manifest.images, manifest.deleted);
+    const restored = await getStoredImages();
+    if (token === activeTokenRef.current) setImages(restored.map(item => item.file));
+    queueSessionSync(token);
+
+    if (structureChanged) {
+      showToast('DOCX импортирован; проверьте несовпадение структуры разделов');
+    } else if (result.warnings.length > 0) {
+      showToast(`DOCX импортирован: ${result.warnings[0]}`);
+    } else {
+      showToast('DOCX импортирован');
+    }
+  };
+
   return (
     <div className="h-screen h-[100dvh] flex flex-col overflow-hidden bg-slate-100 font-sans">
       <Header
@@ -1578,6 +1618,7 @@ export const App: React.FC = () => {
           isOpen={isAiModalOpen}
           onClose={() => setIsAiModalOpen(false)}
           onApplyImport={handleApplyAiImport}
+          onImportDocx={handleImportDocx}
           meta={meta}
           onUpdateCustomInstructions={(val) => setMeta(prev => ({ ...prev, custom_instructions: val }))}
           onUpdatePromptLatex={(val) => setMeta(prev => ({ ...prev, prompt_latex: val }))}

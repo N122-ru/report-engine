@@ -436,6 +436,18 @@ def _title_hints(
             hints["year"] = int(city_match.group(2))
             break
 
+    city_index: int | None = None
+    for index, block in paragraph_records:
+        city_match = re.fullmatch(r"(.+?)\s+((?:19|20)\d{2})", block["plain"].strip())
+        if not city_match:
+            continue
+        city = re.sub(r"^г(?:\.|\s)+\s*", "", city_match.group(1).strip(), flags=re.IGNORECASE)
+        if city and not re.search(r"\b(?:отч[её]т|работа|дисциплина)\b", city, flags=re.IGNORECASE):
+            hints.setdefault("city", city)
+            hints.setdefault("year", int(city_match.group(2)))
+            city_index = index
+            break
+
     has_report_heading = any(
         re.fullmatch(r"ОТЧ[ЕЁ]Т.*", value, flags=re.IGNORECASE) for value in texts[:10]
     )
@@ -452,6 +464,8 @@ def _title_hints(
     if not recognized:
         return {}, None
     title_end = signature_index
+    if city_index is not None and (title_end is None or city_index > title_end):
+        title_end = city_index
     if title_end is None:
         candidates = [index for index, _ in paragraph_records if index <= (work_index or 0)]
         discipline_indices = [index for index, block in paragraph_records if "по дисциплине" in block["plain"].casefold()]

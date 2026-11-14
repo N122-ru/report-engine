@@ -381,6 +381,102 @@ def test_remote_mcp_handshake_and_tools():
     assert "get_templates" not in tool_names
 
 
+def test_streamable_http_uses_json_rpc_dispatcher_and_session_authentication():
+    token = client.get("/api/session/init").json()["token"]
+
+    initialize = client.post(
+        f"/api/mcp?token={token}",
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+    )
+    assert initialize.status_code == 200
+    assert initialize.headers["content-type"].startswith("application/json")
+    assert initialize.json()["result"]["serverInfo"]["sessionToken"] == token
+
+    tools = client.post(
+        "/api/mcp",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+    )
+    assert tools.status_code == 200
+    assert "get_report_state" in {item["name"] for item in tools.json()["result"]["tools"]}
+
+    state = client.post(
+        f"/api/mcp?token={token}",
+        json={"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+              "params": {"name": "get_report_state", "arguments": {}}},
+    ).json()["result"]["content"][0]["text"]
+    assert json.loads(state)["revision"] == client.get(f"/api/session/init?token={token}").json()["revision"]
+
+    notification = client.post(
+        f"/api/mcp?token={token}",
+        json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+    )
+    assert notification.status_code == 202
+    assert notification.content == b""
+
+    assert client.post("/api/mcp", json={"jsonrpc": "2.0", "id": 4, "method": "ping"}).status_code == 401
+    assert client.get("/api/mcp").status_code == 405
+
+
+def test_streamable_http_and_sse_share_one_report_state():
+    token = client.get("/api/session/init").json()["token"]
+    client.post(f"/api/mcp?token={token}", json={
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "update_meta", "arguments": {
+            "work_theme": "Одна сессия", "expected_meta_revision":
+                client.get(f"/api/session/init?token={token}").json()["meta_revision"],
+        }},
+    })
+    current = client.get(f"/api/session/init?token={token}").json()
+    result, payload = _call_report_tool(token, "get_report_state", {})
+    assert result["isError"] is False
+    assert payload["metadata"]["work_theme"] == "Одна сессия"
+    assert payload["snapshot_id"] == current["snapshot_id"]
+
+
+def test_reset_report_endpoint_clears_state_and_requires_confirmation():
+    token = client.get("/api/session/init").json()["token"]
+    client.post(f"/api/session/{token}/sync", json={
+        "content": "# Старый раздел\nТекст", "meta": {"work_theme": "Старый отчёт"},
+    })
+    client.post(
+        f"/api/session/{token}/images",
+        files={"files": ("old.png", VALID_PNG, "image/png")},
+    )
+    before = client.get(f"/api/session/init?token={token}").json()
+
+    rejected = client.post(f"/api/report/reset?token={token}", json={"confirm": False})
+    assert rejected.status_code == 400
+
+    reset = client.post(f"/api/report/reset?token={token}", json={"confirm": True})
+    assert reset.status_code == 200
+    data = reset.json()
+    assert data["token"] == token
+    assert data["content"] == ""
+    assert data["meta"]["work_theme"] == ""
+    assert data["images"] == []
+    assert data["revision"] != before["revision"]
+    assert data["meta_revision"] != before["meta_revision"]
+    assert data["image_revision"] != before["image_revision"]
+    assert client.get(f"/api/session/init?token={token}").json()["content"] == ""
+
+
+def test_reset_report_tool_requires_current_snapshot():
+    token = client.get("/api/session/init").json()["token"]
+    _, state = _call_report_tool(token, "get_report_state", {})
+    stale, _ = _call_report_tool(token, "reset_report", {
+        "expected_snapshot_id": "stale", "confirm": True,
+    })
+    assert stale["isError"] is True
+    assert "конфликт" in stale["content"][0]["text"].lower()
+
+    result, payload = _call_report_tool(token, "reset_report", {
+        "expected_snapshot_id": state["snapshot_id"], "confirm": True,
+    })
+    assert result["isError"] is False
+    assert payload["status"] == "reset"
+
+
 def test_mcp_tools_list_keeps_core_on_first_page_and_paginates_the_rest():
     token = client.get("/api/session/init").json()["token"]
 
@@ -407,7 +503,7 @@ def test_mcp_tools_list_keeps_core_on_first_page_and_paginates_the_rest():
         "apply_patches", "get_document_outline", "replace_block", "delete_block", "move_figure",
         "get_last_edit", "get_edit_history", "rollback_last_edit", "lint_report",
         "autofix_typography", "update_meta", "delete_image", "delete_images", "import_profile",
-        "batch",
+        "batch", "reset_report",
         "get_capabilities", "review_snapshot", "export_report",
     }
 

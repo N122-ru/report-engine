@@ -382,6 +382,41 @@ class SessionManager:
         await session.broadcast(event)
         return session
 
+    async def reset_report(
+        self,
+        token: str,
+        *,
+        source: str = "web",
+        client_id: Optional[str] = None,
+    ) -> SessionData:
+        """Replace one session with a fresh report while retaining its token."""
+        session = self.get_or_create(token)
+        removed_images = sorted(session.images)
+        session.content = ""
+        session.meta = ReportMetadata().model_dump()
+        session.images.clear()
+        session.image_hashes.clear()
+        session.deleted_images.clear()
+        session.edit_history.clear()
+        session.operation_cache.clear()
+        session.verification = ReportVerification()
+        session._revision_cache.clear()
+        session.touch()
+        await session.broadcast({
+            "type": "report_reset",
+            "source": source,
+            "client_id": client_id,
+            "content": "",
+            "meta": session.meta,
+            "deleted": removed_images,
+            "revision": session.revision,
+            "meta_revision": session.meta_revision,
+            "image_revision": session.image_revision,
+            "snapshot_id": session.snapshot_id,
+            "timestamp": time.time(),
+        })
+        return session
+
 
 # Shared session manager instance.
 session_manager = SessionManager()

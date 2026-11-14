@@ -40,6 +40,7 @@ MCP_MUTATING_TOOLS = frozenset({
     "import_profile",
     "delete_image",
     "delete_images",
+    "reset_report",
     "export_report",
 })
 MCP_OPERATION_TOOLS = MCP_MUTATING_TOOLS | {"get_images"}

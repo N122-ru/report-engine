@@ -34,6 +34,25 @@ def _body_items(document: Document) -> Iterable[Paragraph | Table]:
             yield Table(element, document)
 
 
+def _has_explicit_page_break(element: Any) -> bool:
+    """Detect explicit page and non-continuous section breaks in one body item."""
+    xml_element = getattr(element, "_p", None)
+    if xml_element is None:
+        xml_element = getattr(element, "_tbl", None)
+    if xml_element is None:
+        xml_element = element
+    for node in xml_element.iter():
+        if node.tag == qn("w:br") and node.get(qn("w:type")) == "page":
+            return True
+        if node.tag == qn("w:lastRenderedPageBreak"):
+            return True
+        if node.tag == qn("w:sectPr"):
+            break_type = node.find(qn("w:type"))
+            if break_type is None or break_type.get(qn("w:val"), "nextPage") != "continuous":
+                return True
+    return False
+
+
 def _safe_unique_name(filename: str, used: set[str]) -> str:
     """Return a sanitized, unused attachment name."""
     base = os.path.basename(filename.replace("\\", "/")).strip()
@@ -515,7 +534,12 @@ def _render_table(block: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def parse_docx(document: Document, *, reserved_names: set[str] | None = None) -> dict[str, Any]:
+def parse_docx(
+    document: Document,
+    *,
+    reserved_names: set[str] | None = None,
+    skip_title_page: bool = False,
+) -> dict[str, Any]:
     """Parse a python-docx document into Markdown and import metadata."""
     used_names = set(reserved_names or ())
     warnings: list[str] = []
@@ -533,6 +557,19 @@ def parse_docx(document: Document, *, reserved_names: set[str] | None = None) ->
     elif title_end is not None:
         for block in blocks[: title_end + 1]:
             block["skip"] = True
+
+    if skip_title_page:
+        page_break_index = next(
+            (
+                index
+                for index, block in enumerate(blocks)
+                if _has_explicit_page_break(block["source"])
+            ),
+            None,
+        )
+        if page_break_index is not None:
+            for block in blocks[: page_break_index + 1]:
+                block["skip"] = True
 
     # Move a standalone figure caption into the neighboring image alt text.
     for index, block in enumerate(blocks):
@@ -584,13 +621,22 @@ def parse_docx(document: Document, *, reserved_names: set[str] | None = None) ->
     }
 
 
-def parse_docx_bytes(data: bytes, *, reserved_names: set[str] | None = None) -> dict[str, Any]:
+def parse_docx_bytes(
+    data: bytes,
+    *,
+    reserved_names: set[str] | None = None,
+    skip_title_page: bool = False,
+) -> dict[str, Any]:
     """Parse DOCX bytes without writing the source document to disk."""
     if not isinstance(data, bytes) or not data:
         raise ValueError("Файл DOCX пуст")
     if len(data) > MAX_IMAGE_SIZE:
         raise ValueError(f"Размер файла DOCX превышает лимит {MAX_IMAGE_SIZE // (1024 * 1024)} МБ")
-    return parse_docx(Document(io.BytesIO(data)), reserved_names=reserved_names)
+    return parse_docx(
+        Document(io.BytesIO(data)),
+        reserved_names=reserved_names,
+        skip_title_page=skip_title_page,
+    )
 
 
 def read_docx_path(path: str, *, max_size: int = MAX_IMAGE_SIZE) -> bytes:

@@ -4,7 +4,7 @@ import { UploadCloud, X } from 'lucide-react';
 interface ImportDocxModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onImportDocx: (file: File, mode: 'replace' | 'append', applyMeta: boolean) => Promise<void>;
+  onImportDocx: (file: File, mode: 'replace' | 'append', applyMeta: boolean, skipTitlePage: boolean) => Promise<void>;
 }
 
 export const ImportDocxModal: React.FC<ImportDocxModalProps> = ({
@@ -14,6 +14,7 @@ export const ImportDocxModal: React.FC<ImportDocxModalProps> = ({
 }) => {
   const [docxMode, setDocxMode] = useState<'replace' | 'append'>('replace');
   const [applyDocxMeta, setApplyDocxMeta] = useState(true);
+  const [skipTitlePage, setSkipTitlePage] = useState(true);
   const [docxImporting, setDocxImporting] = useState(false);
   const [docxError, setDocxError] = useState<string | null>(null);
 
@@ -24,7 +25,7 @@ export const ImportDocxModal: React.FC<ImportDocxModalProps> = ({
     setDocxError(null);
     setDocxImporting(true);
     try {
-      await onImportDocx(file, docxMode, applyDocxMeta);
+      await onImportDocx(file, docxMode, applyDocxMeta, skipTitlePage);
       onClose();
     } catch (error) {
       setDocxError(error instanceof Error ? error.message : 'Не удалось импортировать DOCX');
@@ -78,6 +79,16 @@ export const ImportDocxModal: React.FC<ImportDocxModalProps> = ({
               <option value="replace">Заменить текущий текст</option>
               <option value="append">Добавить в конец</option>
             </select>
+            <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-700">
+              <input
+                type="checkbox"
+                checked={skipTitlePage}
+                onChange={event => setSkipTitlePage(event.target.checked)}
+                disabled={docxImporting}
+                className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+              />
+              Пропустить титульный лист
+            </label>
             <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-700">
               <input
                 type="checkbox"

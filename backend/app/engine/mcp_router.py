@@ -519,6 +519,7 @@ MCP_LIVE_TOOLS = [
                 "file_path": {"type": "string", "description": "Путь к DOCX на машине сервера"},
                 "mode": {"type": "string", "enum": ["replace", "append"], "default": "replace"},
                 "apply_meta": {"type": "boolean", "default": False},
+                "skip_title_page": {"type": "boolean", "default": False},
                 "expected_revision": {"type": "string"},
                 "expected_meta_revision": {"type": "string"},
                 "expected_image_revision": {"type": "string"},
@@ -720,6 +721,7 @@ async def _apply_live_docx_import(
     *,
     mode: str,
     apply_meta: bool,
+    skip_title_page: bool,
     client_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Apply one parsed DOCX to a live session after all validation succeeds."""
@@ -727,6 +729,8 @@ async def _apply_live_docx_import(
         raise ValueError("Параметр mode должен быть replace или append")
     if not isinstance(apply_meta, bool):
         raise ValueError("Параметр apply_meta должен быть логическим значением")
+    if not isinstance(skip_title_page, bool):
+        raise ValueError("Параметр skip_title_page должен быть логическим значением")
     imported_markdown = parsed.get("markdown", "")
     if not isinstance(imported_markdown, str):
         raise ValueError("Импортированный Markdown имеет некорректный формат")
@@ -792,6 +796,7 @@ async def _apply_live_docx_import(
         "status": "imported",
         "mode": mode,
         "apply_meta": apply_meta,
+        "skip_title_page": skip_title_page,
         "markdown_content": session.content,
         "metadata": session.meta,
         "meta_hints": hints,
@@ -1294,13 +1299,17 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
             load_docx_input, args, allow_file_path=local_files_enabled(),
         )
         parsed = await asyncio.to_thread(
-            parse_docx_bytes, raw_docx, reserved_names=set(session.images),
+            parse_docx_bytes,
+            raw_docx,
+            reserved_names=set(session.images),
+            skip_title_page=args.get("skip_title_page", False),
         )
         return await _apply_live_docx_import(
             session,
             parsed,
             mode=args.get("mode", "replace"),
             apply_meta=args.get("apply_meta", False),
+            skip_title_page=args.get("skip_title_page", False),
         )
 
     elif tool_name == "update_image_layout":
@@ -1592,6 +1601,7 @@ async def import_docx_endpoint(
     file: UploadFile = File(...),
     token: Optional[str] = Query(None),
     client_id: Optional[str] = Query(None),
+    skip_title_page: bool = Query(False),
 ):
     """Parse a DOCX and attach its embedded images to an authenticated session."""
     session = _authorized_session(request, token)
@@ -1606,7 +1616,11 @@ async def import_docx_endpoint(
             detail=f"Размер файла DOCX превышает лимит {MAX_IMAGE_SIZE // (1024 * 1024)} МБ",
         )
     try:
-        parsed = parse_docx_bytes(content, reserved_names=set(session.images))
+        parsed = parse_docx_bytes(
+            content,
+            reserved_names=set(session.images),
+            skip_title_page=skip_title_page,
+        )
     except (zipfile.BadZipFile, docx.opc.exceptions.PackageNotFoundError, KeyError, ValueError, OSError) as exc:
         raise HTTPException(status_code=400, detail=f"Поврежденный или невалидный файл DOCX: {exc}") from exc
 

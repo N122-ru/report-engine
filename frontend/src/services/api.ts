@@ -16,11 +16,15 @@ export interface DocxImportResponse {
   warnings: string[];
 }
 
-export async function importDocx(token: string, file: File): Promise<DocxImportResponse> {
+export async function importDocx(token: string, file: File, skipTitlePage = false): Promise<DocxImportResponse> {
   if (!token) throw new Error('Сессия не инициализирована');
   const formData = new FormData();
   formData.append('file', file);
-  const params = new URLSearchParams({ token, client_id: getClientId() });
+  const params = new URLSearchParams({
+    token,
+    client_id: getClientId(),
+    skip_title_page: String(skipTitlePage),
+  });
   const response = await fetchWithTimeout(`${API_BASE}/api/import/docx?${params.toString()}`, {
     method: 'POST',
     body: formData,

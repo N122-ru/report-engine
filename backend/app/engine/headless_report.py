@@ -355,6 +355,7 @@ class HeadlessReport:
         data: bytes,
         mode: str = "replace",
         apply_meta: bool = False,
+        skip_title_page: bool = False,
         *,
         expected_revision: str | None = None,
         expected_meta_revision: str | None = None,
@@ -366,6 +367,8 @@ class HeadlessReport:
             raise ValueError("Параметр mode должен быть replace или append")
         if not isinstance(apply_meta, bool):
             raise ValueError("Параметр apply_meta должен быть логическим значением")
+        if not isinstance(skip_title_page, bool):
+            raise ValueError("Параметр skip_title_page должен быть логическим значением")
         if self.metadata is not None:
             self._check_expected(
                 expected_snapshot_id,
@@ -375,7 +378,11 @@ class HeadlessReport:
                     "image_revision": expected_image_revision,
                 },
             )
-        parsed = parse_docx_bytes(data, reserved_names=set(self.images))
+        parsed = parse_docx_bytes(
+            data,
+            reserved_names=set(self.images),
+            skip_title_page=skip_title_page,
+        )
         imported_markdown = parsed["markdown"]
         if mode == "append" and self.content.strip() and imported_markdown.strip():
             next_content = self.content.rstrip() + "\n\n" + imported_markdown.strip()
@@ -424,6 +431,7 @@ class HeadlessReport:
             "status": "imported",
             "mode": mode,
             "apply_meta": apply_meta,
+            "skip_title_page": skip_title_page,
             "markdown_content": self.content,
             "metadata": self.metadata.model_dump(),
             "meta_hints": hints,

@@ -1351,10 +1351,15 @@ export const App: React.FC = () => {
     showToast("Ответ ИИ импортирован");
   };
 
-  const handleImportDocx = async (file: File, mode: 'replace' | 'append', applyMeta: boolean): Promise<void> => {
+  const handleImportDocx = async (
+    file: File,
+    mode: 'replace' | 'append',
+    applyMeta: boolean,
+    skipTitlePage: boolean,
+  ): Promise<void> => {
     const token = activeTokenRef.current || sessionToken;
     if (!token) throw new Error('Сессия не инициализирована');
-    const result = await importDocx(token, file);
+    const result = await importDocx(token, file, skipTitlePage);
     const previousContent = contentRef.current;
     const nextContent = mode === 'append' && previousContent.trim() && result.markdown.trim()
       ? `${previousContent.trimEnd()}\n\n${result.markdown.trim()}`

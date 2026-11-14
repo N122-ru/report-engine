@@ -30,6 +30,39 @@ def _generated_docx(markdown: str, metadata: ReportMetadata, images=None) -> byt
     ).getvalue()
 
 
+def _raw_docx(document) -> bytes:
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+def test_skip_title_page_discards_content_before_explicit_page_break():
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("Фрагмент титульного листа")
+    document.add_page_break()
+    document.add_paragraph("Текст отчёта")
+
+    result = parse_docx_bytes(_raw_docx(document), skip_title_page=True)
+
+    assert "Фрагмент титульного листа" not in result["markdown"]
+    assert "Текст отчёта" in result["markdown"]
+
+
+def test_skip_title_page_is_noop_without_explicit_page_break():
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("Текст отчёта без титульного листа")
+    source = _raw_docx(document)
+
+    without_option = parse_docx_bytes(source)
+    with_option = parse_docx_bytes(source, skip_title_page=True)
+
+    assert with_option["markdown"] == without_option["markdown"]
+
+
 def test_import_generated_docx_preserves_editable_body_features():
     markdown = (
         "# Цель работы\nЦель импортирования.\n\n"

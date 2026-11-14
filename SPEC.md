@@ -172,6 +172,14 @@ standards compliance or institution-specific requirements.
   from the profile and defaults for report-only fields, retaining body/media.
   Headless accepts custom logos only through profile import as bounded base64 image
   data URLs, not filesystem paths. There is no headless profile-export tool.
+- Live and headless `import_docx` accept exactly one of `base64_data` or
+  `file_path`; networked live manifests omit `file_path`. The tool requires a
+  current atomic snapshot or all three legacy revisions, parses the DOCX in RAM,
+  and applies body, media, and optional title metadata as one guarded operation.
+  `mode` is `replace` or `append`; `apply_meta` defaults to false. The result
+  includes Markdown, metadata hints, uploaded-image manifest, warnings, and all
+  current revisions. Embedded OMML formulas are preserved as explicit warnings
+  because this project has no OMML-to-LaTeX converter.
 
 ## Delivery and PDF Capability
 
@@ -239,6 +247,7 @@ creates its default `output` directory.
 | --- | --- |
 | `create_report` | Create one RAM draft; never silently reset an existing report. |
  | `import_profile` | Accept `profile` object or local `file_path`, not both; validate `report-engine-profile` version 1 and size limits before applying. Create a draft if absent; otherwise require fresh metadata revision or snapshot. |
+ | `import_docx` | Accept exactly one bounded DOCX source; require a fresh snapshot or all three revisions, support `replace`/`append` and optional `apply_meta`, attach embedded images, and return warnings for lossy constructs. |
  | `get_report_state` | Return Markdown, metadata, image manifest, the three revisions, and `snapshot_id`. |
 | `get_capabilities`, `review_snapshot` | Return runtime/limits/reference discovery or a read-only transferable review with lint; see the shared safety contract. |
 | `list_images`, `get_image` | Read media/manifest; return native MCP image content for vision. |

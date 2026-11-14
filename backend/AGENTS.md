@@ -35,6 +35,9 @@ Own the FastAPI application that validates reports, generates DOCX/PDF files, se
 - Live and headless MCP share the `snapshot_id` contract, structured revision conflicts, operation-id replay protection, and batch result references; legacy revision arguments remain supported.
 - `app/engine/local_files.py` owns the server-local file-source policy: headless always reads paths, the portable web launcher enables them at startup, and networked deployments stay base64-only. Live `file_path` handling rejects other runs with an actionable error, omits the argument from `tools/list` schemas there, and still validates image signatures before storing. Operation replay caches are bounded to 8 MiB with a 256 KiB per-result limit.
 - Live browser metadata is validated before session writes; custom-logo paths are accepted only in local standalone processes, while networked generation accepts embedded image data only. Direct document generation keeps the same local-file guard as a defense in depth.
+- `app/engine/docx_import.py` owns the bounded, in-memory DOCX-to-Markdown parser, title hints, and embedded-media extraction; unsupported OMML conversion remains an explicit warning rather than invented LaTeX.
+- `/api/import/docx` authenticates an existing session before reading the upload, does not apply parsed Markdown or metadata, and attaches extracted images only after the full document has been parsed.
+- Live and headless `import_docx` accept one bounded base64 or local-file source according to transport policy, require current revisions, and apply Markdown, media, and optional title hints atomically with operation replay protection.
 
 ## Work Guidance
 

@@ -15,6 +15,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
 from .engine.headless_report import HeadlessReport
+from .engine.docx_import import load_docx_input
 from .engine.image_input import IMAGE_SOURCE_SCHEMA, MAX_IMAGES_COUNT, load_image_input
 from .engine.mcp_batch import BATCH_SCHEMA, resolve_batch_arguments, validate_batch_calls
 from .engine.pdf_converter import pdf_export_enabled
@@ -117,6 +118,21 @@ def _tools() -> list[types.Tool]:
                 "file_path": {"type": "string", "description": "Путь к JSON-файлу относительно текущего каталога"},
                 "expected_meta_revision": revision,
             },
+        ),
+        _tool(
+            "import_docx",
+            "Импортировать DOCX в Markdown, изображения и подсказки реквизитов. "
+            "Для существующего отчёта требуется свежий snapshot_id или все три revision.",
+            {
+                "base64_data": {"type": "string", "description": "DOCX в Base64"},
+                "file_path": {"type": "string", "description": "Путь к DOCX на машине сервера"},
+                "mode": {"type": "string", "enum": ["replace", "append"], "default": "replace"},
+                "apply_meta": {"type": "boolean", "default": False},
+                "expected_revision": revision,
+                "expected_meta_revision": revision,
+                "expected_image_revision": revision,
+            },
+            **{"oneOf": [{"required": ["base64_data"]}, {"required": ["file_path"]}]},
         ),
         _tool(
             "get_report_state",
@@ -271,13 +287,14 @@ def _resources(report: HeadlessReport) -> list[types.Resource]:
 
 
 HEADLESS_MUTATING_TOOLS = frozenset({
-    "create_report", "import_profile", "upload_image", "upload_images",
+    "create_report", "import_profile", "import_docx", "upload_image", "upload_images",
     "append_or_update_section", "update_meta", "delete_image",
     "autofix_typography", "export_report",
 })
 HEADLESS_OPERATION_TOOLS = HEADLESS_MUTATING_TOOLS | {"get_images"}
 HEADLESS_REVISION_GUARDS = {
     "import_profile": ("expected_meta_revision",),
+    "import_docx": ("expected_revision", "expected_meta_revision", "expected_image_revision"),
     "upload_image": ("expected_image_revision", "expected_revision"),
     "upload_images": ("expected_image_revision", "expected_revision"),
     "append_or_update_section": ("expected_revision",),
@@ -323,7 +340,7 @@ def _dispatch_tool_uncached(report: HeadlessReport, name: str, args: dict[str, A
     """Dispatch one headless tool with the same error handling inside batches."""
     try:
         if name in HEADLESS_REVISION_GUARDS:
-            if name == "import_profile" and report.metadata is None:
+            if name in {"import_profile", "import_docx"} and report.metadata is None:
                 pass
             elif name in {"upload_image", "upload_images", "delete_image"}:
                 require_revision_guard(args, (), alternatives=HEADLESS_REVISION_GUARDS[name])
@@ -379,6 +396,18 @@ def _dispatch_tool_uncached(report: HeadlessReport, name: str, args: dict[str, A
             return _text_result(report.import_profile(
                 load_profile_input(args), expected,
                 expected_snapshot_id=args.get("expected_snapshot_id"),
+            ))
+        if name == "import_docx":
+            data = load_docx_input(args, allow_file_path=True)
+            snapshot = args.get("expected_snapshot_id")
+            return _text_result(report.import_docx(
+                data,
+                mode=args.get("mode", "replace"),
+                apply_meta=args.get("apply_meta", False),
+                expected_revision=args.get("expected_revision") if snapshot is None else None,
+                expected_meta_revision=args.get("expected_meta_revision") if snapshot is None else None,
+                expected_image_revision=args.get("expected_image_revision") if snapshot is None else None,
+                expected_snapshot_id=snapshot,
             ))
         if name == "get_report_state":
             return _text_result(report.get_report_state(args.get("detail", "full")))

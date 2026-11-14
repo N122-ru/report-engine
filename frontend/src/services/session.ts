@@ -55,6 +55,18 @@ export interface SessionInitResponse {
   deleted?: string[];
 }
 
+export interface ResetReportResponse {
+  status: 'reset';
+  token: string;
+  content: string;
+  meta: SessionMetadata;
+  images: SessionImageItem[];
+  revision: string;
+  meta_revision: string;
+  image_revision?: string;
+  snapshot_id?: string;
+}
+
 export interface SessionImagesResponse {
   images: SessionImageItem[];
   deleted: string[];
@@ -82,7 +94,7 @@ export type SessionSyncResult =
   | { status: 'conflict'; conflict_type: 'meta'; meta_revision: string; meta: SessionMetadata };
 
 export interface LiveSyncEvent {
-  type: 'content_updated' | 'meta_updated' | 'image_added' | 'image_deleted';
+  type: 'content_updated' | 'meta_updated' | 'image_added' | 'image_deleted' | 'report_reset';
   source?: string;
   section?: string;
   content?: string;
@@ -92,6 +104,7 @@ export interface LiveSyncEvent {
   meta_revision?: string;
   image_revision?: string;
   meta?: SessionMetadata;
+  snapshot_id?: string;
   meta_patch?: {
     base_revision: string;
     changed: Record<string, unknown>;
@@ -217,6 +230,25 @@ export const syncSessionToServer = async (
     throw error;
   }
   return response.json() as Promise<SessionSyncResult>;
+};
+
+/** Reset the current in-memory report while retaining its browser session token. */
+export const resetReport = async (token: string): Promise<ResetReportResponse> => {
+  if (!token) throw new Error('Сессия не инициализирована');
+  const response = await fetchWithTimeout(`/api/report/reset?token=${encodeURIComponent(token)}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Client-ID': getClientId(),
+    },
+    body: JSON.stringify({ confirm: true }),
+  });
+  if (!response.ok) throw new Error(`Не удалось создать новый отчёт (${response.status})`);
+  const data = await response.json() as ResetReportResponse;
+  if (data.status !== 'reset' || data.token !== token || typeof data.content !== 'string') {
+    throw new Error('Некорректный ответ сервера при сбросе отчёта');
+  }
+  return data;
 };
 
 /**

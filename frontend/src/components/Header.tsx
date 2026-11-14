@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   Download, FileText, UploadCloud, Save, FolderOpen, 
-  Bot, FileCheck2, ChevronDown, Plug, BookOpen
+  Bot, FileCheck2, ChevronDown, Plug, BookOpen, FilePlus2
 } from 'lucide-react';
 import { ReportMetadata } from '../types';
 
@@ -20,6 +20,7 @@ interface HeaderProps {
   onImportJson: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onExportProfile: () => void;
   onImportProfile: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onNewReport: () => void;
   isGenerating: boolean;
 }
 
@@ -38,6 +39,7 @@ export const Header: React.FC<HeaderProps> = ({
   onImportJson,
   onExportProfile,
   onImportProfile,
+  onNewReport,
   isGenerating
 }) => {
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
@@ -105,6 +107,18 @@ export const Header: React.FC<HeaderProps> = ({
 
           {isFileMenuOpen && (
             <div className="absolute left-0 top-full mt-1.5 w-52 max-w-[calc(100vw-20px)] rounded-xl bg-white border border-slate-200 shadow-xl p-1.5 z-50 text-xs space-y-0.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsFileMenuOpen(false);
+                  onNewReport();
+                }}
+                className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-slate-700 hover:bg-slate-100 transition-colors text-left font-semibold"
+              >
+                <FilePlus2 className="h-4 w-4 text-blue-600" />
+                <span>Новый отчёт</span>
+              </button>
+              <div className="my-1 border-t border-slate-100" />
               <label className="flex items-center gap-2 px-2.5 py-2 rounded-lg text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer font-medium">
                 <FolderOpen className="h-4 w-4 text-blue-600" />
                 <span>Открыть проект (.json)</span>

@@ -279,7 +279,7 @@ def test_title_page_geometry_and_samara_position(tmp_path):
             y2_samara = y2
 
     assert y2_samara is not None, "'Самара' must be on page 1"
-    assert 750.0 <= y2_samara <= 785.2, f"Samara yMax={y2_samara:.1f}pt is out of bottom range [750, 785.2]"
+    assert 790.0 <= y2_samara <= 820.0, f"Samara yMax={y2_samara:.1f}pt is out of first-page footer range [790, 820]"
 
 def test_no_title_page_option():
     from app.models.report import GenerateOptions
@@ -465,8 +465,22 @@ def test_title_only_has_exactly_one_section_and_one_page():
     doc = docx.Document(bio)
     # Require exactly one section.
     assert len(doc.sections) == 1
-    # Keep the city/year footer on the first page.
-    assert any(re.search(r"(19|20)\d{2}", p.text) for p in doc.paragraphs)
+    # Keep the city/year in the first-page footer, not the body flow.
+    assert any(re.search(r"(19|20)\d{2}", p.text) for p in doc.sections[0].first_page_footer.paragraphs)
+
+
+def test_title_city_and_year_use_an_unlinked_first_page_footer():
+    """Verify city/year is isolated to the title section's first-page footer."""
+    meta = ReportMetadata(city="г. Самара", year=2026)
+    doc = docx.Document(build_docx_report(meta, ""))
+
+    footer = doc.sections[0].first_page_footer
+    assert any(p.text == "Самара 2026" for p in footer.paragraphs)
+    assert doc.sections[0].different_first_page_header_footer is True
+    assert all("Самара 2026" not in paragraph.text for paragraph in doc.paragraphs)
+
+    # No frame or calculated body spacing is used for the title location.
+    assert all(paragraph._p.pPr.find(qn("w:framePr")) is None for paragraph in doc.paragraphs)
 
 
 def test_typography_prepositions_and_initials():
@@ -934,8 +948,9 @@ def test_logo_mode_none_generates_clean_title_page():
     doc = docx.Document(bio)
 
     full_text = "\n".join(p.text for p in doc.paragraphs)
+    footer_text = "\n".join(p.text for section in doc.sections for p in section.first_page_footer.paragraphs)
     assert meta.university in full_text
-    assert "Москва" in full_text
+    assert "Москва" in footer_text
     # The title page must not contain an anchored logo.
     anchors = doc.paragraphs[0]._p.xpath('.//*[local-name()="anchor"]')
     assert len(anchors) == 0

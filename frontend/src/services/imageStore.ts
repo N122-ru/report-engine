@@ -139,3 +139,12 @@ export const deleteStoredImageByName = async (filename: string): Promise<void> =
     if (!exact || image.sha256 === exact.sha256) await deleteStoredImage(image.filename);
   }
 };
+
+/** Remove every browser-side original when the user starts a new report. */
+export const clearStoredImages = async (): Promise<void> => {
+  const db = await openDatabase();
+  const transaction = db.transaction(STORE_NAME, 'readwrite');
+  const completed = completeTransaction(transaction);
+  transaction.objectStore(STORE_NAME).clear();
+  await completed;
+};

@@ -1,6 +1,7 @@
 """Standalone MCP server for local report-agent workflows."""
 
 import argparse
+import asyncio
 import base64
 import binascii
 import json
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import mcp.types as types
+import uvicorn
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
@@ -624,9 +626,35 @@ def _make_server(report: HeadlessReport) -> Server:
     )
 
 
-async def _run(output_dir: Path) -> None:
+def _parse_http_address(value: str) -> tuple[str, int]:
+    """Parse the explicit HOST:PORT address accepted by the CLI."""
+    if not isinstance(value, str) or ":" not in value:
+        raise ValueError("--http должен иметь формат HOST:PORT")
+    host, port_text = value.rsplit(":", 1)
+    host = host.strip().strip("[]")
+    try:
+        port = int(port_text)
+    except ValueError as exc:
+        raise ValueError("Порт --http должен быть целым числом") from exc
+    if not host or not 0 <= port <= 65535:
+        raise ValueError("--http требует непустой HOST и порт от 0 до 65535")
+    return host, port
+
+
+async def _run(output_dir: Path, http_address: str | None = None) -> None:
     report = HeadlessReport(output_dir)
     server = _make_server(report)
+    if http_address is not None:
+        host, port = _parse_http_address(http_address)
+        application = server.streamable_http_app(
+            streamable_http_path="/mcp",
+            json_response=True,
+            stateless_http=False,
+            host=host,
+        )
+        config = uvicorn.Config(application, host=host, port=port, log_level="info")
+        await uvicorn.Server(config).serve()
+        return
     async with stdio_server() as (read_stream, write_stream):
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
@@ -634,10 +662,13 @@ async def _run(output_dir: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the local headless Report Engine MCP server")
     parser.add_argument("--output-dir", required=True, type=Path, help="Existing directory for explicit exports")
+    parser.add_argument(
+        "--http", metavar="HOST:PORT",
+        help="Serve stateful Streamable HTTP at /mcp instead of stdio; state is shared across MCP requests",
+    )
     args = parser.parse_args()
     try:
-        import asyncio
-        asyncio.run(_run(args.output_dir))
+        asyncio.run(_run(args.output_dir, args.http))
     except (ValueError, OSError) as exc:
         parser.error(str(exc))
 

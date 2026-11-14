@@ -71,6 +71,15 @@ function normalizeFio(fio: string): string {
   return trimmed;
 }
 
+function formatTitleCity(city: string): string {
+  const cleaned = (city || '')
+    .trim()
+    .replace(/^\s*г\.\s*|^\s*г\s+/i, '')
+    .replace(/[\s,]+г\.?\s*$/i, '')
+    .trim();
+  return cleaned || 'Город';
+}
+
 function capitalizeCaption(caption: string): string {
   const index = [...caption].findIndex(char => /\p{L}/u.test(char));
   if (index < 0) return caption;
@@ -787,7 +796,7 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
     const hasDetails = Boolean(meta.institute || meta.department);
     const headerDxa = normalizeLogoMode(meta.logo_mode) === 'none'
       ? (hasDetails ? 1500 : 1050) : (hasDetails ? 1710 : 1110);
-    const fixedDxa = headerDxa + 1180 + themeLines * 300 + numPersons * 750 + 240;
+    const fixedDxa = headerDxa + 1180 + themeLines * 300 + numPersons * 750;
     const targetDxa = 14250 - Math.max(0, numPersons - 2) * 150 - Math.max(0, themeLines - 1) * 120;
     const available = Math.max(0, targetDxa - fixedDxa);
     const gap1 = available > 1000 ? Math.floor(available * 0.30) : available > 0 ? Math.max(100, Math.floor(available * 0.30)) : 40;
@@ -1224,11 +1233,14 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
                   </table>
                 </div>
 
-                {/* City/year footer centered just above the bottom margin. */}
-                <div className="text-center text-[12px] font-serif mt-auto pt-4 pb-0">
-                  <p>{meta.city ? `${meta.city} ` : ''}{meta.year || new Date().getFullYear()}</p>
-                </div>
               </div>
+
+              {/* City/year is title text anchored to the page footer zone. */}
+              {meta.year !== null && meta.year !== undefined && (
+                <div className="absolute bottom-[57px] left-[85px] right-[43px] text-center text-[12px] font-serif">
+                  <p>{formatTitleCity(meta.city)} {meta.year}</p>
+                </div>
+              )}
 
               {/* Hide the first page number under GOST. */}
               <div className="absolute bottom-2 right-4 text-[9px] text-slate-400 font-sans select-none">

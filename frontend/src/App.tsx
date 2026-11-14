@@ -15,6 +15,7 @@ import { isExternalImageRef, resolveImageName } from './services/imageRefs';
 import { generateDocument, autofixMarkdown, getRuntimeCapabilities, getVersionInfo, importDocx, type VersionInfo } from './services/api';
 import { 
   initSession, 
+  resetReport,
   syncSessionToServer, 
   subscribeToSessionEvents,
   uploadSessionImages,
@@ -31,7 +32,7 @@ import {
   type ContentPatch,
 } from './services/session';
 import { recoverSessionImages } from './services/imageRecovery';
-import { canonicalImageName, deleteStoredImage, deleteStoredImageByName, deleteStoredImageFile, getStoredImages, saveStoredImage } from './services/imageStore';
+import { canonicalImageName, clearStoredImages, deleteStoredImage, deleteStoredImageByName, deleteStoredImageFile, getStoredImages, saveStoredImage } from './services/imageStore';
 import { 
   getGlobalProfile, 
   getSubjectPresets, 
@@ -755,6 +756,32 @@ export const App: React.FC = () => {
     let firstConnection = true;
     const unsubscribe = subscribeToSessionEvents(sessionToken, (evt) => {
       if (sessionToken !== activeTokenRef.current) return;
+      if (evt.type === 'report_reset') {
+        if (evt.client_id === clientIdRef.current) return;
+        const remoteMeta = { ...DEFAULT_META, ...(evt.meta || {}) };
+        sessionGenerationRef.current += 1;
+        imageRevisionRef.current = evt.image_revision;
+        acknowledgedRef.current = {
+          content: '',
+          revision: evt.revision || '',
+          meta: serializeMetadata(remoteMeta),
+          metaRevision: evt.meta_revision || '',
+        };
+        conflictRef.current = null;
+        setSyncConflict(null);
+        setSyncError(false);
+        contentRef.current = '';
+        metaRef.current = remoteMeta;
+        imagesRef.current = [];
+        setContent('');
+        setMeta(remoteMeta);
+        setImages([]);
+        void queueMediaOperation(() => clearStoredImages()).catch(error => {
+          setLocalImageError(error instanceof Error ? error.message : 'Не удалось очистить изображения');
+        });
+        showToast('ИИ создал новый отчёт');
+        return;
+      }
       if (evt.type === 'content_updated' && evt.revision) {
         const base = acknowledgedRef.current;
         let remoteContent: string | null = typeof evt.content === 'string' ? evt.content : null;
@@ -919,6 +946,54 @@ export const App: React.FC = () => {
       showToast("Создан новый токен сессии");
     } catch {
       showToast("Ошибка при создании нового токена");
+    }
+  };
+
+  const handleNewReport = async () => {
+    if (!window.confirm('Создать новый отчёт? Текущий текст, реквизиты и изображения будут удалены.')) return;
+    if (!sessionToken) {
+      showToast('Сессия ещё не готова');
+      return;
+    }
+    try {
+      let reset: Awaited<ReturnType<typeof resetReport>> | null = null;
+      await queueMediaOperation(async () => {
+        reset = await resetReport(sessionToken);
+        await clearStoredImages();
+      });
+      // The assignment happens inside the media queue callback, so control-flow
+      // analysis keeps `reset` narrowed to null here; assert the real shape.
+      const state = reset as Awaited<ReturnType<typeof resetReport>> | null;
+      if (!state) throw new Error('Не удалось получить состояние нового отчёта');
+      const nextMeta = { ...DEFAULT_META, ...(state.meta || {}) };
+      sessionGenerationRef.current += 1;
+      imageRevisionRef.current = state.image_revision;
+      acknowledgedRef.current = {
+        content: state.content,
+        revision: state.revision,
+        meta: serializeMetadata(nextMeta),
+        metaRevision: state.meta_revision,
+      };
+      conflictRef.current = null;
+      setSyncConflict(null);
+      setSyncError(false);
+      setFailedImageUploads([]);
+      setLocalImageError(null);
+      contentRef.current = state.content;
+      metaRef.current = nextMeta;
+      imagesRef.current = [];
+      setContent(state.content);
+      setMeta(nextMeta);
+      setImages([]);
+      try {
+        localStorage.removeItem(REPORT_CONTENT_KEY);
+        localStorage.removeItem(REPORT_META_KEY);
+      } catch {
+        // The in-memory report is already reset; storage cleanup is best effort.
+      }
+      showToast('Создан новый отчёт');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Не удалось создать новый отчёт');
     }
   };
 
@@ -1331,6 +1406,7 @@ export const App: React.FC = () => {
         onImportJson={handleImportJson}
         onExportProfile={handleExportProfile}
         onImportProfile={handleImportProfile}
+        onNewReport={handleNewReport}
         isGenerating={isGenerating}
       />
 

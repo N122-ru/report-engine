@@ -573,6 +573,18 @@ MCP_LIVE_TOOLS = [
         }
     },
     {
+        "name": "reset_report",
+        "description": "Полностью очистить текущий отчёт и вернуть свежие реквизиты. Требует явного подтверждения и актуальную snapshot_id.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["expected_snapshot_id", "confirm"],
+            "properties": {
+                "expected_snapshot_id": {"type": "string", "description": "Актуальная snapshot_id из get_report_state"},
+                "confirm": {"const": True, "description": "Должно быть true для подтверждения удаления отчёта"},
+            },
+        },
+    },
+    {
         "name": "get_capabilities",
         "description": "Возвращает транспорт, версию контракта, PDF, лимиты и доступные справочники.",
         "inputSchema": {"type": "object", "properties": {}},
@@ -844,6 +856,22 @@ async def _dispatch_mcp_tool(tool_name: str, args: Dict[str, Any], session: Sess
         return results
 
     _validate_live_revision_guard(tool_name, args)
+
+    if tool_name == "reset_report":
+        if type(args.get("confirm")) is not bool or args.get("confirm") is not True:
+            raise ValueError("Для сброса отчёта передайте confirm: true")
+        expected_snapshot = args.get("expected_snapshot_id")
+        if not isinstance(expected_snapshot, str) or not expected_snapshot:
+            raise ValueError("Сброс отчёта требует актуальную expected_snapshot_id")
+        _check_expected_snapshot(args, session, ())
+        await session_manager.reset_report(session.token, source="mcp_agent")
+        return {
+            "status": "reset",
+            "message": "Отчёт очищен, реквизиты и ревизии возвращены к значениям свежей сессии",
+            "metadata": session.meta,
+            "markdown_content": session.content,
+            **_session_snapshot(session),
+        }
 
     if tool_name == "get_capabilities":
         return get_capabilities("live")
@@ -1835,8 +1863,48 @@ async def session_events_sse(token: str, request: Request):
 
 
 # ==============================================================================
-# Endpoints: MCP Server over SSE (Model Context Protocol HTTP Transport)
+# Endpoints: MCP Server over HTTP transports (Model Context Protocol)
 # ==============================================================================
+
+
+@router.post("/api/report/reset")
+async def reset_report_endpoint(request: Request, token: Optional[str] = Query(None)):
+    """Reset the authenticated browser report without changing its session token."""
+    session = _authorized_session(request, token)
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Требуется JSON с confirm: true")
+    if not isinstance(payload, dict) or payload.get("confirm") is not True:
+        raise HTTPException(status_code=400, detail="Для сброса передайте confirm: true")
+
+    async with session.mcp_write_lock:
+        session = await session_manager.reset_report(
+            session.token, source="web", client_id=request.headers.get("x-client-id"),
+        )
+        return {
+            "status": "reset",
+            "token": session.token,
+            "content": session.content,
+            "meta": session.meta,
+            "images": session.list_images(),
+            "deleted": [],
+            **_session_snapshot(session),
+        }
+
+
+@router.post("/api/mcp")
+async def mcp_streamable_http_transport(request: Request, token: Optional[str] = Query(None)):
+    """Handle one MCP Streamable HTTP JSON-RPC request for a live session."""
+    session = _authorized_session(request, token)
+    # Keep the established dispatcher and JSON-RPC semantics shared with SSE.
+    return await mcp_post_message(request, token=session.token)
+
+
+@router.get("/api/mcp")
+async def mcp_streamable_http_get():
+    """Reject the unimplemented server-to-client Streamable HTTP stream."""
+    return Response(status_code=405)
 
 @router.get("/api/mcp/sse")
 async def mcp_sse_transport(request: Request, token: str = Query(...)):

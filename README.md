@@ -158,6 +158,26 @@ MCP для Docker подключается так же, как для web-вар
 через `get_report_state` перед экспортом. При остановке черновик и изображения теряются.
 В автономных сборках — headless и переносимом web — агент может читать изображения
 и профиль прямо с диска этой машины через `file_path`; настраивать ничего не нужно.
+Для headless-клиентов, которым нужен HTTP, вместо stdio можно запустить
+`report-engine-headless --output-dir /path/to/output --http 127.0.0.1:8000`.
+Состояние сохраняется между запросами, MCP endpoint — `/mcp`; этот режим не меняет
+контракт stdio.
+
+Оба продукта говорят на MCP Streamable HTTP: один POST с JSON-RPC — один
+JSON-RPC ответ, отдельный коннектор не нужен. Быстрая проверка из терминала:
+
+```bash
+# headless: после initialize сессия приходит в заголовке Mcp-Session-Id
+curl -s -X POST http://127.0.0.1:8000/mcp -H 'Content-Type: application/json' -d \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}'
+curl -s -X POST http://127.0.0.1:8000/mcp -H 'Content-Type: application/json' \
+  -H 'Mcp-Session-Id: ИЗ-ОТВЕТА-INITIALIZE' -d \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_report_state","arguments":{}}}'
+
+# web: тот же протокол, токен сессии в query или Bearer-заголовке
+curl -s -X POST 'http://127.0.0.1:8000/api/mcp?token=tok_...' -H 'Content-Type: application/json' -d \
+  '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
 
 ## Подключение агента к веб-редактору
 
@@ -179,6 +199,9 @@ MCP для Docker подключается так же, как для web-вар
 `report-engine-web` нельзя подключать как stdio-сервер. В Docker и других сетевых
 развёртываниях чтение файлов с машины сервера отключено: изображения агент передаёт
 через base64, а профиль — объектом JSON.
+Web также принимает MCP JSON-RPC через `POST /api/mcp` с токеном в query-параметре
+или Bearer-заголовке. Кнопка **«Новый отчёт»** в меню «Файл» очищает текст,
+реквизиты и изображения после подтверждения, сохраняя токен текущей вкладки.
 
 ### Инструменты MCP и ограничения
 

@@ -48,6 +48,7 @@ export const ImportDocxModal: React.FC<ImportDocxModalProps> = ({
           </div>
           <button
             onClick={onClose}
+            aria-label="Закрыть"
             className="rounded-lg p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700 transition-colors shrink-0"
           >
             <X className="h-4 w-4" />

@@ -934,7 +934,6 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
               <div className="absolute right-0 top-full mt-1.5 w-72 max-w-[calc(100vw-24px)] max-h-[70vh] overflow-y-auto rounded-xl bg-white border border-slate-200 shadow-xl p-3 z-50 text-xs space-y-3">
                 <div className="font-bold text-slate-800 border-b border-slate-100 pb-1.5 flex items-center justify-between">
                   <span>Параметры верстки</span>
-                  <span className="text-[10px] text-slate-400 font-normal">ГОСТ 7.32 / СТО</span>
                 </div>
 
                 {/* Heading alignment. */}
@@ -1057,9 +1056,6 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
                         Упрощённые
                       </button>
                     </div>
-                    <p className="text-[10px] text-slate-400 mt-1 leading-snug">
-                      Упрощённые — обычный текст без объектов Word.
-                    </p>
                   </div>
                 )}
               </div>
@@ -1569,7 +1565,6 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
                 <div className="font-bold text-slate-800 mt-1">
                   Л: 30 мм, П: 15 мм, В/Н: 20 мм
                 </div>
-                <div className="text-[10px] text-emerald-600 mt-0.5">Норма ГОСТ 7.32</div>
               </div>
               <div className="p-3 bg-white rounded-xl border border-slate-200">
                 <span className="text-slate-500">Оценка объема:</span>

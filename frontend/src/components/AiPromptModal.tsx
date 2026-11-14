@@ -194,7 +194,6 @@ ${structureInstruction}`;
       writing: {
         id: 'writing',
         title: 'Написание отчёта',
-        shortDesc: 'Сформировать отчёт по прикреплённым материалам',
         icon: Layers,
         badge: 'Написание',
         text: `${toneRole}
@@ -219,7 +218,6 @@ ${outputRule}
       rewrite: {
         id: 'rewrite',
         title: 'Редактирование черновика по ГОСТ',
-        shortDesc: 'Исправить стиль и структуру по ГОСТ',
         icon: Layers,
         badge: 'Рерайт',
         text: `${toneRole}
@@ -241,7 +239,6 @@ ${outputRule}
       defense: {
         id: 'defense',
         title: 'Вопросы к защите',
-        shortDesc: 'Сформировать вопросы и краткие технические ответы',
         icon: Layers,
         badge: 'Защита',
         text: `${toneRole}
@@ -495,9 +492,6 @@ ${outputRule}
                         <IconComponent className={`h-3.5 w-3.5 ${isSelected ? 'text-blue-600' : 'text-slate-500'}`} />
                         <span className="text-xs font-bold text-slate-800">{p.title}</span>
                       </div>
-                      <p className="text-[11px] text-slate-500 leading-snug line-clamp-1">
-                        {p.shortDesc}
-                      </p>
                     </button>
                   );
                 })}
@@ -569,7 +563,7 @@ ${outputRule}
               <textarea
                 value={rawAiText}
                 onChange={e => setRawAiText(e.target.value)}
-                placeholder="Вставьте ответ нейросети (включая блок ```markdown) — обрамляющие блоки кода будут удалены автоматически..."
+                placeholder="Вставьте ответ нейросети (включая блок ```markdown)..."
                 className="w-full h-64 rounded-lg border border-slate-300 p-3 font-mono text-xs text-slate-800 focus:border-blue-500 focus:outline-none leading-relaxed"
               />
 

@@ -82,9 +82,11 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="text-[9px] sm:text-[10px] text-slate-400 shrink-0">v{appVersion}</span>
             )}
           </div>
-          <p className="text-[11px] text-slate-500 truncate max-w-xs sm:max-w-sm hidden sm:block">
-            {meta.university || 'ГОСТ 7.32-2017 / ГОСТ 2.105-2019'}
-          </p>
+          {meta.university && (
+            <p className="text-[11px] text-slate-500 truncate max-w-xs sm:max-w-sm hidden sm:block">
+              {meta.university}
+            </p>
+          )}
         </div>
       </div>
 
@@ -271,7 +273,6 @@ export const Header: React.FC<HeaderProps> = ({
                   <FileText className="h-4 w-4 text-slate-600" />
                   <div>
                     <div className="font-semibold text-slate-800">Экспорт в PDF</div>
-                    <div className="text-[10px] text-slate-400">Через локальный конвертер</div>
                   </div>
                 </button>
               ) : (
@@ -296,7 +297,6 @@ export const Header: React.FC<HeaderProps> = ({
                 <FileCheck2 className="h-4 w-4 text-blue-600" />
                 <div>
                   <div className="font-semibold text-slate-800">Только титульный лист</div>
-                  <div className="text-[10px] text-slate-400">1 страница (.docx)</div>
                 </div>
               </button>
             </div>

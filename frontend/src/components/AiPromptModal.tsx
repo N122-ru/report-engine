@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
   X, Copy, Check, Bot, 
-  ClipboardCheck, Code, Layers
+  ClipboardCheck, Layers
 } from 'lucide-react';
 import { ReportMetadata } from '../types';
 
@@ -9,6 +9,7 @@ interface AiPromptModalProps {
   isOpen: boolean;
   onClose: () => void;
   onApplyImport: (cleanedMarkdown: string, extractedTheme?: string, mode?: 'replace' | 'append') => void;
+  content: string;
   meta: ReportMetadata;
   onUpdateCustomInstructions?: (val: string) => void;
   onUpdatePromptLatex?: (val: boolean) => void;
@@ -19,14 +20,16 @@ export const AiPromptModal: React.FC<AiPromptModalProps> = ({
   isOpen,
   onClose,
   onApplyImport,
+  content,
   meta,
   onUpdateCustomInstructions,
   onUpdatePromptLatex,
   onUpdatePromptCodeBlocks
 }) => {
   const [activeTab, setActiveTab] = useState<'prompts' | 'import'>('prompts');
-  const [selectedPromptKey, setSelectedPromptKey] = useState<'vision' | 'code' | 'rewrite' | 'defense'>('vision');
+  const [selectedPromptKey, setSelectedPromptKey] = useState<'writing' | 'rewrite' | 'defense'>('writing');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [reportPrompt, setReportPrompt] = useState<{ key: string; text: string } | null>(null);
   // Custom instructions synchronized with metadata.
   const [customInstructions, setCustomInstructions] = useState<string>(meta.custom_instructions || '');
 
@@ -188,14 +191,14 @@ ${structureInstruction}`;
     const outputRule = `ФОРМАТ ОТВЕТА: верни весь результат внутри одного блока кода \`\`\`\`markdown ... \`\`\`\` ровно с четырьмя обратными апострофами. Не добавляй текст до или после блока.`;
 
     return {
-      vision: {
-        id: 'vision',
-        title: 'По скриншотам и заданию',
-        shortDesc: 'Сформировать пошаговый отчёт по скриншотам и заданию',
+      writing: {
+        id: 'writing',
+        title: 'Написание отчёта',
+        shortDesc: 'Сформировать отчёт по прикреплённым материалам',
         icon: Layers,
-        badge: 'Скриншоты',
+        badge: 'Написание',
         text: `${toneRole}
-Составь лаконичный отчёт ${workFullTitle} по скриншотам и тексту задания.
+Составь лаконичный отчёт ${workFullTitle} по прикреплённым материалам: скриншотам, тексту задания, исходному коду, логам и результатам тестирования.
 
 Дисциплина: ${disciplineName}
 Номер работы: ${numSuffix ? numSuffix.trim() : 'без номера'}
@@ -204,38 +207,13 @@ ${structureInstruction}`;
 ${commonRules}
 ${customSection}
 
-Оформи цель и вывод кратко, а ход работы — связным текстом или нумерованным списком. Используй только реальные имена файлов изображений из материалов.
+Описывай ход работы, алгоритм, тестирование и код только по переданным материалам. Не создавай ссылки на несуществующие изображения. Объёмный код, конфигурации и логи оформляй блоками кода только если это разрешено настройкой.
 ${outputRule}
 
 ---
 === МАТЕРИАЛЫ ДЛЯ ОТЧЁТА ===
-(Прикрепи скриншоты и вставь текст задания или заметок ниже этой линии)
+(Прикрепи скриншоты и вставь текст задания, исходный код, логи и вывод тестирования ниже этой линии)
 ============================`
-      },
-
-      code: {
-        id: 'code',
-        title: 'По исходному коду',
-        shortDesc: 'Сформировать отчёт по программе и тестированию',
-        icon: Code,
-        badge: 'Код',
-        text: `${toneRole}
-Сформируй отчёт ${workFullTitle} по исходному коду программы.
-
-Дисциплина: ${disciplineName}
-Номер работы: ${numSuffix ? numSuffix.trim() : 'без номера'}
-Тема работы: ${themeName}
-
-${commonRules}
-${customSection}
-
-Описывай алгоритм, тестирование и код только по переданным материалам. Не создавай ссылки на несуществующие изображения. Объёмный код, конфигурации и логи оформляй блоками кода только если это разрешено настройкой.
-${outputRule}
-
----
-=== ИСХОДНЫЙ КОД ПРОГРАММЫ ===
-(Вставь исходный код программы ниже этой линии)
-==============================`
       },
 
       rewrite: {
@@ -395,6 +373,14 @@ ${outputRule}
   };
 
   const currentPromptObj = PROMPTS[selectedPromptKey];
+  const promptText = reportPrompt?.key === selectedPromptKey ? reportPrompt.text : currentPromptObj.text;
+  const insertReportIntoPrompt = () => {
+    if (!content.trim()) return;
+    setReportPrompt({
+      key: selectedPromptKey,
+      text: `${currentPromptObj.text}\n\n${content.trim()}`,
+    });
+  };
 
   if (!isOpen) return null;
 
@@ -522,28 +508,37 @@ ${outputRule}
                   <span className="text-xs font-semibold text-slate-700">
                     Готовый текст промпта:
                   </span>
-                  <button
-                    onClick={() => copyToClipboard(currentPromptObj.text, selectedPromptKey)}
-                    className={`flex items-center gap-1 rounded-md px-3 py-1 text-xs font-semibold transition-all ${
-                      copiedKey === selectedPromptKey
-                        ? 'bg-emerald-600 text-white'
-                        : 'bg-blue-600 text-white hover:bg-blue-700'
-                    }`}
-                  >
-                    {copiedKey === selectedPromptKey ? (
-                      <>
-                        <Check className="h-3 w-3" /> Скопировано!
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="h-3 w-3" /> Скопировать
-                      </>
-                    )}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={insertReportIntoPrompt}
+                      disabled={!content.trim()}
+                      className="rounded-md border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition-all hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Подставить отчёт
+                    </button>
+                    <button
+                      onClick={() => copyToClipboard(promptText, selectedPromptKey)}
+                      className={`flex items-center gap-1 rounded-md px-3 py-1 text-xs font-semibold transition-all ${
+                        copiedKey === selectedPromptKey
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-blue-600 text-white hover:bg-blue-700'
+                      }`}
+                    >
+                      {copiedKey === selectedPromptKey ? (
+                        <>
+                          <Check className="h-3 w-3" /> Скопировано!
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3 w-3" /> Скопировать
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
 
                 <pre className="max-h-56 overflow-auto rounded border border-slate-200 bg-white p-3 font-mono text-[11px] text-slate-800 whitespace-pre-wrap leading-relaxed select-all">
-                  {currentPromptObj.text}
+                  {promptText}
                 </pre>
                 {copiedKey === 'copy-error' && (
                   <p className="text-[11px] font-medium text-amber-700">

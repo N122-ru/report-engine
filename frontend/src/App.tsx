@@ -1702,6 +1702,7 @@ export const App: React.FC = () => {
           isOpen={isAiModalOpen}
           onClose={() => setIsAiModalOpen(false)}
           onApplyImport={handleApplyAiImport}
+          content={content}
           meta={meta}
           onUpdateCustomInstructions={(val) => setMeta(prev => ({ ...prev, custom_instructions: val }))}
           onUpdatePromptLatex={(val) => setMeta(prev => ({ ...prev, prompt_latex: val }))}

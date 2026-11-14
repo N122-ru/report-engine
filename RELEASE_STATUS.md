@@ -6,10 +6,16 @@
 `feature/mcp-streamable-http-and-reset` и `feature/docx-import` — смержены в
 `main` merge-коммитом f88bf67. В него вошли:
 
-- **Streamable HTTP MCP** (spec 2025-03-26): web принимает JSON-RPC через
-  `POST /api/mcp` (токен в query или Bearer; 202 на notifications, 405 на
-  server-to-client stream), headless получил режим `--http HOST:PORT`
-  (stateful endpoint `/mcp` рядом с stdio, дефолт не изменён);
+- **Streamable HTTP MCP — единственный web-транспорт** (spec 2025-03-26):
+  web принимает JSON-RPC через `POST /api/mcp` (токен в query или Bearer;
+  202 на notifications, 405 на server-to-client stream); headless получил
+  режим `--http HOST:PORT` (stateful endpoint `/mcp` рядом со stdio, дефолт
+  не изменён);
+- **SSE-транспорт MCP удалён**: маршруты `/api/mcp/sse` и `/api/mcp/messages`
+  выпилены вместе с окном подключения; окно «ИИ-агент (MCP)» генерирует
+  Streamable HTTP URL и конфиги клиентов (`type: "http"`, url-формат).
+  UI-канал событий вкладки `/api/session/{token}/events` не затронут;
+
 - **Сброс отчёта**: MCP-тулза `reset_report` (expected_snapshot_id + confirm)
   и `POST /api/report/reset` с тем же подтверждением; состояние сессии
   очищается полностью (текст, мета, изображения, история, ревизии), токен
@@ -44,6 +50,14 @@
   коммиты проверены супервизором: типовые ошибки фронтового reset-флоу
   (`never` из замыкания и сравнение number со строкой) исправлены
   в c91f4ff перед мержем.
+
+### Breaking changes для 0.7.0
+
+- MCP-подключение к web-варианту работает только по Streamable HTTP
+  (`POST /api/mcp?token=...`); SSE-конфигурации клиентов (`type: "sse"`,
+  URL `/api/mcp/sse`) больше не работают. Клиенты с HTTP-транспортом
+  (Claude, Cursor и другие remote-MCP) переустанавливаются на тот же URL
+  без `sse`-суффикса. Headless stdio не затронут.
 
 ### Ещё не проверено для 0.7.0
 

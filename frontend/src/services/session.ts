@@ -252,7 +252,7 @@ export const resetReport = async (token: string): Promise<ResetReportResponse> =
 };
 
 /**
- * Subscribe to live MCP agent updates over SSE.
+ * Subscribe to live MCP agent updates through the browser session-events channel.
  */
 export const subscribeToSessionEvents = (
   token: string,
@@ -269,7 +269,7 @@ export const subscribeToSessionEvents = (
       const data: LiveSyncEvent = JSON.parse(msg.data);
       onEvent(data);
     } catch (e) {
-      console.error('Failed to parse SSE event:', e);
+      console.error('Failed to parse session event:', e);
     }
   });
 

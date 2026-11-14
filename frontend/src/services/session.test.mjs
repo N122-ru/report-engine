@@ -32,7 +32,7 @@ test('image layout changes are not announced as title page changes and duplicate
   assert.equal(metadataUpdateMessage(after, { ...after, work_theme: 'Новая тема' }), 'ИИ обновил реквизиты отчёта');
 });
 
-test('browser sync identifies the originating tab for SSE acknowledgements', async () => {
+test('browser sync identifies the originating tab for session acknowledgements', async () => {
   const storage = new Map();
   globalThis.sessionStorage = {
     getItem: key => storage.get(key) ?? null,

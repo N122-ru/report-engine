@@ -592,7 +592,7 @@ export const App: React.FC = () => {
         }
         const latest = acknowledgedRef.current;
         if (latest && !conflictRef.current) {
-          // The request's SSE event can precede its HTTP response. Do not
+          // The request's session event can precede its HTTP response. Do not
           // replace a newer revision with an older acknowledgement.
           const contentWasSent = payload.content !== undefined || payload.content_patches !== undefined;
           acknowledgedRef.current = {
@@ -749,7 +749,7 @@ export const App: React.FC = () => {
     void initializeBrowserSession();
   }, []);
 
-  // Subscribe to agent events over SSE, reconnecting when the token changes.
+  // Subscribe to agent events through the session-events channel, reconnecting when the token changes.
   useEffect(() => {
     if (!sessionToken) return;
 

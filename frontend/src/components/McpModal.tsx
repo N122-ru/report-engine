@@ -23,38 +23,23 @@ export const McpModal: React.FC<McpModalProps> = ({
   if (!isOpen) return null;
 
   const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8000';
-  const sseUrl = `${origin}/api/mcp/sse?token=${token}`;
+  const streamableHttpUrl = `${origin}/api/mcp?token=${token}`;
 
-  // One-time agent setup explicitly selects the SSE transport.
-  const agentSetupCommand = `Добавь MCP-сервер "report-live" с transport: "sse" и URL: ${sseUrl} в свои инструменты и подключись к нему. Если работа с этим сервером не разовая — вызови промпт agent_onboarding, самостоятельно пройди его чеклист изучения окружения и заведи локальную памятку в своей системе скиллов (сервер её не хранит). Веди раздел «Клиентские оптимизации»: дополняй его опытом после каждой сессии, не трогая серверный manifest-блок. Анкета не нужна; только если характер работы неочевиден, задай максимум один короткий вопрос: «работа с этим сервером разовая или постоянная?» Для one-shot памятку не создавай; если постоянная работа или неизвестно — продолжай без вопросов. Прочитай канонические правила из ресурса report://rules/gost732 и веди отчёт по ним: проверь get_capabilities и прочитай все страницы tools/list (следуй nextCursor). Ссылка привязана к открытой вкладке «ИИ-агент (MCP)»: если инструменты не отвечают или отчёт оказался пустым, попроси свежий URL в этом окне.`;
+  const agentSetupCommand = `Добавь MCP-сервер report-live с URL ${streamableHttpUrl} (Streamable HTTP) и подключись. Если работа с этим сервером не разовая — вызови промпт agent_onboarding, самостоятельно пройди его чеклист изучения окружения и заведи локальную памятку в своей системе скиллов (сервер её не хранит). Веди раздел «Клиентские оптимизации»: дополняй его опытом после каждой сессии, не трогая серверный manifest-блок. Анкета не нужна; только если характер работы неочевиден, задай максимум один короткий вопрос: «работа с этим сервером разовая или постоянная?» Для one-shot памятку не создавай; если постоянная работа или неизвестно — продолжай без вопросов. Прочитай канонические правила из ресурса report://rules/gost732 и веди отчёт по ним: проверь get_capabilities и прочитай все страницы tools/list (следуй nextCursor). Ссылка привязана к открытой вкладке «ИИ-агент (MCP)»: если инструменты не отвечают или отчёт оказался пустым, попроси свежий URL в этом окне.`;
 
   const antigravityConfig = JSON.stringify({
-    mcpServers: {
-      "report-live": {
-        serverUrl: sseUrl
+      mcpServers: {
+        "report-live": {
+          url: streamableHttpUrl
+        }
       }
-    }
   }, null, 2);
 
-  const cursorConfig = JSON.stringify({
-    mcpServers: {
-      "report-live": {
-        url: sseUrl
-      }
-    }
-  }, null, 2);
+  const cursorConfig = JSON.stringify({ url: streamableHttpUrl }, null, 2);
 
-  // Claude Code reads an entry without "type" as a stdio server and skips it.
-  const claudeConfig = JSON.stringify({
-    mcpServers: {
-      "report-live": {
-        type: "sse",
-        url: sseUrl
-      }
-    }
-  }, null, 2);
+  const claudeConfig = JSON.stringify({ type: "http", url: streamableHttpUrl }, null, 2);
 
-  const hermesConfigCommand = `hermes config set mcp_servers.report-live.url '${sseUrl}' && hermes config set mcp_servers.report-live.transport sse`;
+  const hermesConfigCommand = `hermes config set mcp_servers.report-live.url '${streamableHttpUrl}' && hermes config set mcp_servers.report-live.transport http`;
 
   const currentJsonConfig = activeJsonTab === 'antigravity' 
     ? antigravityConfig 
@@ -157,7 +142,7 @@ export const McpModal: React.FC<McpModalProps> = ({
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  SSE URL
+                  Streamable HTTP URL
                 </button>
                 <button
                   onClick={() => setSetupTab('cli')}
@@ -210,21 +195,21 @@ export const McpModal: React.FC<McpModalProps> = ({
               </div>
             )}
 
-            {/* Direct SSE URL. */}
+            {/* Direct Streamable HTTP URL. */}
             {setupTab === 'direct_url' && (
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 space-y-2 animate-in fade-in duration-100">
                 <p className="text-[11px] text-slate-600">
-                  Ссылка для конфигурации MCP (тип транспорта: <strong>SSE</strong>):
+                  Ссылка для конфигурации MCP (тип транспорта: <strong>Streamable HTTP</strong>):
                 </p>
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                   <input
                     type="text"
                     readOnly
-                    value={sseUrl}
+                    value={streamableHttpUrl}
                     className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-[11px] text-slate-800 select-all"
                   />
                   <button
-                    onClick={() => copyToClipboard(sseUrl, 'url')}
+                    onClick={() => copyToClipboard(streamableHttpUrl, 'url')}
                     className="shrink-0 flex items-center justify-center gap-1.5 rounded-lg bg-slate-800 hover:bg-slate-900 text-white px-3.5 py-2 font-bold text-xs transition-all shadow-sm active:scale-95"
                   >
                     {copiedKey === 'url' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
@@ -238,7 +223,7 @@ export const McpModal: React.FC<McpModalProps> = ({
             {setupTab === 'cli' && (
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 space-y-2 animate-in fade-in duration-100">
                 <p className="text-[11px] text-slate-600">
-                  Команда для консоли Hermes Agent (задаёт SSE URL и транспорт sse):
+                  Команда для консоли Hermes Agent (задаёт URL и транспорт Streamable HTTP):
                 </p>
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                   <input

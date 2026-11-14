@@ -278,7 +278,11 @@ async def autofix_markdown(request: Request, content: str = Form(...)):
                     return f"![{title}]({src})"
                 return full_img
 
-            chunk = pat_after.sub(_sub_after, chunk)
+            while True:
+                updated = pat_after.sub(_sub_after, chunk)
+                if updated == chunk:
+                    break
+                chunk = updated
 
             # Consume a duplicate caption preceding the image.
             pat_before = re.compile(

@@ -197,6 +197,14 @@ def test_autofix_idempotent():
         twice = client.post("/api/autofix", data={"content": once}).json()
         assert twice["fixes_applied"] == []
 
+def test_autofix_converges_after_multiple_duplicate_captions():
+    content = "![image.png](image.png)\nРисунок 1: Архитектура\nРисунок 1: Архитектура"
+    once = client.post("/api/autofix", data={"content": content}).json()
+    twice = client.post("/api/autofix", data={"content": once["fixed_content"]}).json()
+
+    assert twice["fixed_content"] == once["fixed_content"]
+    assert twice["fixes_applied"] == []
+
 def test_security_headers():
     res = client.get("/api/health")
     assert res.headers["x-content-type-options"] == "nosniff"

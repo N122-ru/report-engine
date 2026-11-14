@@ -151,7 +151,7 @@ def test_package_guide_contains_first_run_mcp_and_troubleshooting(product, tmp_p
     built.mkdir()
     package = _assemble_package(built, tmp_path / "release", product)
     guide = (package / "README.md").read_text(encoding="utf-8")
-    for text in ("Перед первым запуском", "stdio", "SSE", "ИИ-агент (MCP)", "Команда агенту",
+    for text in ("Перед первым запуском", "stdio", "Streamable HTTP", "ИИ-агент (MCP)", "Команда агенту",
                  "--output-dir", "Устранение неполадок", "_internal", "Ctrl+C", "--port 8001"):
         assert text in guide
     assert f"В этом пакете находится только **{product}**" in guide

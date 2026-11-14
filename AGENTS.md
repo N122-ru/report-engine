@@ -338,6 +338,11 @@ When the user requests a durable behavior change, record it here or in the relev
   * Зеркало контракта в `SKILL.md`: `expected_snapshot_id` для `upload_images` на обоих транспортах, гейт `lint_report(markdown_content)` (альтернативный текст не открывает экспорт), указатели на `update_image_layout`/`delete_images` и `tools_diff`, имена точечных редакторов; англоязычный абзац о `$N` переведён на русский. Описание `markdown_content` в схеме `lint_report` дополнено тем же правилом, пункт 3 чеклиста onboarding читает все страницы `tools/list`.
   * Сообщения `start.sh`/`start.py` приведены к фактическим требованиям (Python 3.11+, Node 20.19+/22.12+); в README добавлена строка про macOS.
 
+### 2.31. Streamable HTTP как единственный MCP-транспорт web
+* Web MCP принимает JSON-RPC только через `POST /api/mcp` с токеном в query-параметре или Bearer-заголовке. Маршруты прежнего MCP-транспорта и очередь его соединений удалены.
+* Канал `GET /api/session/{token}/events` остаётся отдельным каналом событий браузерных вкладок и не является MCP-подключением.
+* Модалка MCP и каноническая инструкция используют URL Streamable HTTP. Headless stdio и его отдельный HTTP-режим (`--http` с `/mcp`) не изменены.
+
 ---
 
 ---

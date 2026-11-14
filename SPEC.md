@@ -57,10 +57,12 @@ standards compliance or institution-specific requirements.
 - Browser and live MCP writes require the fresh revision for the affected state.
   Stale HTTP writes return 409; the UI retains the local draft and requires explicit
   conflict resolution. Client IDs distinguish a tab's acknowledgements from remote edits.
-- Browser SSE synchronizes session changes and reconciles image hashes after reconnect.
+- The browser session-events channel synchronizes session changes and reconciles image
+  hashes after reconnect.
   A conflicting filename must not silently replace different image bytes.
-- Live MCP uses `/api/mcp/sse?token=...`, including in standalone web. The browser's
-  MCP modal supplies the session connection; tokens must not be shared publicly.
+- Live web MCP uses authenticated Streamable HTTP at `POST /api/mcp?token=...`, including
+  in standalone web. The browser's MCP modal supplies the session connection; tokens
+  must not be shared publicly.
 - Live tools read state/media, edit sections or revision-bound blocks, apply patches,
   update metadata/image layouts, inspect recent edits, roll back the last agent edit,
   lint, and fix typography. Writes must not silently overwrite adjacent sections.
@@ -191,7 +193,8 @@ standards compliance or institution-specific requirements.
   (Ubuntu 22.04 build runner) and Windows x64. They embed Python and dependencies;
   installed Python/Node.js and a source checkout are not runtime requirements.
 - Standalone web binds to `127.0.0.1`, rejects foreign Host/Origin values, uses a
-  fixed explicit port, serves the bundled SPA and live SSE MCP, and runs no Node process.
+  fixed explicit port, serves the bundled SPA and live Streamable HTTP MCP, and runs
+  no Node process.
 - Native packages do not include office converters or system document fonts.
   Required frozen data is checked byte-for-byte before assembly; web includes all SPA assets.
 - DOCX is independent of PDF. `/api/capabilities` reports `pdf_export` and converter kind;
@@ -319,12 +322,11 @@ convenience launchers: `start-web.sh` / `start-web.bat`.
   profile import/export behavior described in the product spec.
 - Enable server-local `file_path` sources at startup: this launcher runs on the
   user's machine, unlike Docker or source web, which stay base64-only.
-- Also expose **live SSE MCP** at `/api/mcp/sse?token=...` and authenticated
-  Streamable HTTP JSON-RPC at `POST /api/mcp`; use the browser MCP
-  modal for session configuration. This executable is not a stdio MCP server
-  and does not depend on the headless process.
+- Also expose authenticated **Streamable HTTP MCP** at `POST /api/mcp`; use the
+  browser MCP modal for session configuration. This executable is not a stdio MCP
+  server and does not depend on the headless process.
 - Keep text/metadata in browser localStorage, images in IndexedDB, and server
-  sessions in RAM. Retain revision checks, SSE acknowledgements, and explicit
+  sessions in RAM. Retain revision checks, session acknowledgements, and explicit
   conflict resolution. Profiles transfer reusable requisites; projects back up reports.
 - Print the loopback URL. Convenience launchers attempt browser opening after
   `/api/health` readiness; missing browser-opening tools do not prevent startup.

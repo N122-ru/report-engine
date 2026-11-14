@@ -48,7 +48,8 @@ output directory with the same package name; use a separate output root when
 preserving prior builds. Do not commit generated packages or runtimes.
 
 Headless contains no frontend; web contains the SPA, serves loopback HTTP,
-and also exposes live SSE MCP. Web is not a stdio MCP executable.
+and exposes authenticated Streamable HTTP MCP at `/api/mcp`. Web is not a stdio
+MCP executable.
 
 ## Runtime resources and package UX
 
@@ -109,7 +110,7 @@ using absolute executable/output paths and `REPORT_ENGINE_DISABLE_PDF=1`:
    content, and embedded default-logo media. An HTTP 200 or an existing filename
    alone is insufficient.
 4. **Launcher/connection UX:** run the convenience launchers, confirm the printed
-   selected URL and readiness-gated browser opening, then connect live SSE MCP
+   selected URL and readiness-gated browser opening, then connect Streamable HTTP MCP
    from the web modal. Check failure exit codes, Windows UTF-8 paths/error pauses,
    and clean headless protocol stdout on the actual target OS.
 

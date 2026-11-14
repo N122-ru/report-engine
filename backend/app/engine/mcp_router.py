@@ -1,7 +1,4 @@
-"""Route MCP calls and synchronize report sessions over SSE.
-
-Remote agents connect to the user's session using the MCP SSE transport.
-"""
+"""Route MCP calls and synchronize report sessions."""
 
 import sys
 import os
@@ -9,7 +6,6 @@ import io
 import json
 import re
 import time
-import uuid
 import asyncio
 import base64
 import binascii
@@ -70,8 +66,6 @@ from ..version import APP_VERSION
 
 router = APIRouter()
 
-# Active MCP SSE connections map connection IDs to asyncio queues.
-_mcp_connections: Dict[str, asyncio.Queue] = {}
 MCP_TOOL_ERRORS = (ValueError, TypeError, KeyError, OSError, RuntimeError, binascii.Error)
 
 
@@ -1897,8 +1891,7 @@ async def reset_report_endpoint(request: Request, token: Optional[str] = Query(N
 async def mcp_streamable_http_transport(request: Request, token: Optional[str] = Query(None)):
     """Handle one MCP Streamable HTTP JSON-RPC request for a live session."""
     session = _authorized_session(request, token)
-    # Keep the established dispatcher and JSON-RPC semantics shared with SSE.
-    return await mcp_post_message(request, token=session.token)
+    return await _handle_mcp_request(request, token=session.token)
 
 
 @router.get("/api/mcp")
@@ -1906,70 +1899,8 @@ async def mcp_streamable_http_get():
     """Reject the unimplemented server-to-client Streamable HTTP stream."""
     return Response(status_code=405)
 
-@router.get("/api/mcp/sse")
-async def mcp_sse_transport(request: Request, token: str = Query(...)):
-    """Connect MCP clients through SSE using a session token.
-
-    Example: https://example.com/api/mcp/sse?token=tok_...
-    """
-    session = session_manager.get(token)
-    if not session:
-        session = session_manager.get_or_create(token)
-
-    conn_id = str(uuid.uuid4())
-    queue: asyncio.Queue = asyncio.Queue()
-    _mcp_connections[conn_id] = queue
-
-    # Honor reverse-proxy proto/host/prefix headers so the POST endpoint
-    # shares the client's connection origin, as required by the MCP SDK.
-    raw_proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "http"
-    proto = raw_proto.split(",")[0].strip().lower()
-
-    raw_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
-    host = raw_host.split(",")[0].strip()
-
-    raw_prefix = request.headers.get("x-forwarded-prefix") or request.scope.get("root_path", "")
-    root_path = raw_prefix.strip().rstrip("/")
-    if root_path and not root_path.startswith("/"):
-        root_path = f"/{root_path}"
-
-    endpoint_url = f"{proto}://{host}{root_path}/api/mcp/messages?token={session.token}&sessionId={conn_id}"
-
-    async def mcp_stream():
-        try:
-            # MCP handshake: advertise the JSON-RPC message endpoint URL.
-            yield f"event: endpoint\ndata: {endpoint_url}\n\n"
-            await asyncio.sleep(0.001)
-
-            while True:
-                if await request.is_disconnected():
-                    break
-                try:
-                    msg = await asyncio.wait_for(queue.get(), timeout=15.0)
-                    yield f"event: message\ndata: {json.dumps(msg, ensure_ascii=False)}\n\n"
-                except asyncio.TimeoutError:
-                    yield ": ping\n\n"
-        finally:
-            _mcp_connections.pop(conn_id, None)
-
-    return StreamingResponse(
-        mcp_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
-    )
-
-
-@router.post("/api/mcp/messages")
-async def mcp_post_message(
-    request: Request,
-    token: str = Query(...),
-    sessionId: Optional[str] = Query(None)
-):
-    """Accept JSON-RPC 2.0 commands from a connected MCP agent."""
+async def _handle_mcp_request(request: Request, token: str):
+    """Accept one JSON-RPC 2.0 request through the live HTTP MCP endpoint."""
     session = session_manager.get_or_create(token)
 
     try:
@@ -2266,10 +2197,5 @@ async def mcp_post_message(
                 "id": req_id,
                 "error": {"code": -32601, "message": f"Method '{method}' not found"}
             }
-
-    # Send the response through the active SSE connection for this sessionId.
-    if sessionId and sessionId in _mcp_connections and response_payload:
-        await _mcp_connections[sessionId].put(response_payload)
-        return Response(status_code=202)
 
     return response_payload or Response(status_code=202)

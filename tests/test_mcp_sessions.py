@@ -21,7 +21,7 @@ def _list_all_mcp_tools(token):
     while True:
         params = {} if cursor is None else {"cursor": cursor}
         response = client.post(
-            f"/api/mcp/messages?token={token}",
+            f"/api/mcp?token={token}",
             json={"jsonrpc": "2.0", "id": request_id, "method": "tools/list", "params": params},
         )
         assert response.status_code == 200
@@ -216,7 +216,7 @@ def test_browser_sync_rejects_server_local_logo_path_when_not_standalone(monkeyp
 
 
 @pytest.mark.anyio
-async def test_browser_sync_marks_sse_event_with_originating_client():
+async def test_browser_sync_marks_session_event_with_originating_client():
     from app.engine.sessions import session_manager
     import asyncio
 
@@ -360,7 +360,7 @@ def test_remote_mcp_handshake_and_tools():
 
     # MCP initialize
     init_res = client.post(
-        f"/api/mcp/messages?token={token}",
+        f"/api/mcp?token={token}",
         json={"jsonrpc": "2.0", "id": 1, "method": "initialize"}
     )
     assert init_res.status_code == 200
@@ -418,7 +418,7 @@ def test_streamable_http_uses_json_rpc_dispatcher_and_session_authentication():
     assert client.get("/api/mcp").status_code == 405
 
 
-def test_streamable_http_and_sse_share_one_report_state():
+def test_streamable_http_shares_one_report_state():
     token = client.get("/api/session/init").json()["token"]
     client.post(f"/api/mcp?token={token}", json={
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -481,7 +481,7 @@ def test_mcp_tools_list_keeps_core_on_first_page_and_paginates_the_rest():
     token = client.get("/api/session/init").json()["token"]
 
     first = client.post(
-        f"/api/mcp/messages?token={token}",
+        f"/api/mcp?token={token}",
         json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
     )
     assert first.status_code == 200
@@ -544,26 +544,6 @@ async def test_parallel_mcp_writes_are_serialized_by_revision():
     assert "параллельная запись" in session.content
 
 
-def test_mcp_sse_post_response_is_not_returned_twice():
-    import asyncio
-    from app.engine.mcp_router import _mcp_connections
-
-    token = client.get("/api/session/init").json()["token"]
-    connection_id = "test-no-duplicate"
-    queue = asyncio.Queue()
-    _mcp_connections[connection_id] = queue
-    try:
-        response = client.post(
-            f"/api/mcp/messages?token={token}&sessionId={connection_id}",
-            json={"jsonrpc": "2.0", "id": 22, "method": "ping"},
-        )
-        assert response.status_code == 202
-        queued = queue.get_nowait()
-        assert queued["id"] == 22
-    finally:
-        _mcp_connections.pop(connection_id, None)
-
-
 def test_mcp_update_meta_merges_and_validates():
     res1 = client.get("/api/session/init")
     token = res1.json()["token"]
@@ -575,7 +555,7 @@ def test_mcp_update_meta_merges_and_validates():
 
     # A targeted update changes only the supplied fields.
     upd = client.post(
-        f"/api/mcp/messages?token={token}",
+        f"/api/mcp?token={token}",
         json={
             "jsonrpc": "2.0",
             "id": 11,
@@ -596,7 +576,7 @@ def test_mcp_update_meta_merges_and_validates():
 
     # Reject empty patches.
     bad = client.post(
-        f"/api/mcp/messages?token={token}",
+        f"/api/mcp?token={token}",
         json={
             "jsonrpc": "2.0",
             "id": 12,
@@ -668,7 +648,7 @@ def test_mcp_delete_image_tool():
     current = client.get(f"/api/session/init?token={token}").json()
 
     rm = client.post(
-        f"/api/mcp/messages?token={token}",
+        f"/api/mcp?token={token}",
         json={
             "jsonrpc": "2.0",
             "id": 13,
@@ -688,11 +668,11 @@ def test_mcp_delete_image_tool():
 
 def test_mcp_json_rpc_boundary_rejects_non_object_params_without_500():
     token = client.get("/api/session/init").json()["token"]
-    invalid_body = client.post(f"/api/mcp/messages?token={token}", json=["not", "an", "object"])
+    invalid_body = client.post(f"/api/mcp?token={token}", json=["not", "an", "object"])
     assert invalid_body.status_code == 200
     assert invalid_body.json()["error"]["code"] == -32600
 
-    invalid_params = client.post(f"/api/mcp/messages?token={token}", json={
+    invalid_params = client.post(f"/api/mcp?token={token}", json={
         "jsonrpc": "2.0", "id": 21, "method": "tools/call",
         "params": {"name": "get_report_state", "arguments": []},
     })
@@ -786,7 +766,7 @@ def test_skill_guide_resource_serves_skill_md():
     res1 = client.get("/api/session/init")
     token = res1.json()["token"]
     res = client.post(
-        f"/api/mcp/messages?token={token}",
+        f"/api/mcp?token={token}",
         json={
             "jsonrpc": "2.0",
             "id": 14,
@@ -812,7 +792,7 @@ def test_remote_mcp_updates_live_session():
 
     # The agent calls append_or_update_section.
     mcp_call = client.post(
-        f"/api/mcp/messages?token={token}",
+        f"/api/mcp?token={token}",
         json={
             "jsonrpc": "2.0",
             "id": 10,
@@ -842,7 +822,7 @@ def test_remote_mcp_updates_live_session():
 
 def _call_report_tool(token, name, arguments):
     response = client.post(
-        f"/api/mcp/messages?token={token}",
+        f"/api/mcp?token={token}",
         json={"jsonrpc": "2.0", "id": 77, "method": "tools/call",
               "params": {"name": name, "arguments": arguments}},
     )
@@ -1697,7 +1677,7 @@ def test_mcp_multimodal_image_tools():
 
     # The agent calls list_images.
     list_call = client.post(
-        f"/api/mcp/messages?token={token}",
+        f"/api/mcp?token={token}",
         json={
             "jsonrpc": "2.0",
             "id": 11,
@@ -1712,7 +1692,7 @@ def test_mcp_multimodal_image_tools():
 
     # A multimodal agent calls get_image for visual inspection.
     get_call = client.post(
-        f"/api/mcp/messages?token={token}",
+        f"/api/mcp?token={token}",
         json={
             "jsonrpc": "2.0",
             "id": 12,
@@ -1729,7 +1709,7 @@ def test_mcp_multimodal_image_tools():
 
     # Batch retrieval returns multiple image blocks in one MCP call.
     batch_call = client.post(
-        f"/api/mcp/messages?token={token}",
+        f"/api/mcp?token={token}",
         json={
             "jsonrpc": "2.0",
             "id": 121,
@@ -1746,7 +1726,7 @@ def test_mcp_multimodal_image_tools():
     b64_graph = base64.b64encode(sample_png).decode("ascii")
     current = client.get(f"/api/session/init?token={token}").json()
     upload_call = client.post(
-        f"/api/mcp/messages?token={token}",
+        f"/api/mcp?token={token}",
         json={
             "jsonrpc": "2.0",
             "id": 13,
@@ -1772,64 +1752,6 @@ def test_mcp_multimodal_image_tools():
     state_call = client.get(f"/api/session/init?token={token}")
     state = state_call.json()
     assert "![График зависимости времени отклика](generated_chart.png)" in state["content"]
-
-
-from starlette.requests import Request
-from app.engine.mcp_router import mcp_sse_transport
-
-@pytest.mark.anyio
-async def test_mcp_sse_endpoint_respects_reverse_proxy_https():
-    """Verify SSE endpoint events preserve the HTTPS reverse proxy's scheme and origin."""
-    scope = {
-        "type": "http",
-        "method": "GET",
-        "path": "/api/mcp/sse",
-        "headers": [
-            (b"x-forwarded-proto", b"https"),
-            (b"x-forwarded-host", b"lab.example.com"),
-            (b"host", b"lab.example.com"),
-        ],
-        "query_string": b"token=tok_testproxy"
-    }
-    req = Request(scope)
-    res = await mcp_sse_transport(req, token="tok_testproxy")
-    assert res.status_code == 200
-    first_chunk = await res.body_iterator.__anext__()
-    assert first_chunk.startswith("event: endpoint\n")
-    assert "https://lab.example.com/api/mcp/messages?token=tok_testproxy" in first_chunk
-
-    # Fall back to HTTP during local development without a proxy.
-    scope_http = {
-        "type": "http",
-        "method": "GET",
-        "path": "/api/mcp/sse",
-        "headers": [
-            (b"host", b"localhost:8000"),
-        ],
-        "query_string": b"token=tok_testproxy"
-    }
-    req_http = Request(scope_http)
-    res_http = await mcp_sse_transport(req_http, token="tok_testproxy")
-    first_chunk_http = await res_http.body_iterator.__anext__()
-    assert "http://localhost:8000/api/mcp/messages?token=tok_testproxy" in first_chunk_http
-
-    # Exercise comma-separated proxy headers, uppercase HTTPS, and a forwarded prefix.
-    scope_multi = {
-        "type": "http",
-        "method": "GET",
-        "path": "/api/mcp/sse",
-        "headers": [
-            (b"x-forwarded-proto", b"HTTPS, http"),
-            (b"x-forwarded-host", b"lab.example.com, internal-proxy:8080"),
-            (b"x-forwarded-prefix", b"/sub-report/"),
-            (b"host", b"internal-proxy:8080"),
-        ],
-        "query_string": b"token=tok_nestedproxy"
-    }
-    req_multi = Request(scope_multi)
-    res_multi = await mcp_sse_transport(req_multi, token="tok_nestedproxy")
-    first_chunk_multi = await res_multi.body_iterator.__anext__()
-    assert "https://lab.example.com/sub-report/api/mcp/messages?token=tok_nestedproxy" in first_chunk_multi
 
 
 def test_token_neutrality_and_validation():

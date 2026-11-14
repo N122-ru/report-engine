@@ -38,7 +38,7 @@ def transport(request, tmp_path, monkeypatch):
             error = result.is_error
             text = result.content[0].text
         else:
-            response = client.post(f"/api/mcp/messages?token={token}", json={
+            response = client.post(f"/api/mcp?token={token}", json={
                 "jsonrpc": "2.0", "id": 1, "method": "tools/call",
                 "params": {"name": name, "arguments": arguments},
             })
@@ -317,7 +317,7 @@ def test_live_capabilities_follow_local_file_policy(monkeypatch):
     token = client.get("/api/session/init").json()["token"]
 
     def capabilities():
-        result = client.post(f"/api/mcp/messages?token={token}", json={
+        result = client.post(f"/api/mcp?token={token}", json={
             "jsonrpc": "2.0", "id": 7, "method": "tools/call",
             "params": {"name": "get_capabilities", "arguments": {}},
         }).json()["result"]
@@ -497,19 +497,19 @@ async def test_layered_resources_and_core_prompt_in_both_transports(transport):
         assert "После каждой сессии работы с сервером дополняй" in onboarding_text
 
     if name == "live":
-        initialized = client.post(f"/api/mcp/messages?token={token}", json={
+        initialized = client.post(f"/api/mcp?token={token}", json={
             "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {},
         }).json()
         assert_initialize_instructions(initialized["result"]["instructions"])
 
         async def request(method, params):
-            response = client.post(f"/api/mcp/messages?token={token}", json={
+            response = client.post(f"/api/mcp?token={token}", json={
                 "jsonrpc": "2.0", "id": 2, "method": method, "params": params,
             }).json()
             assert "error" not in response, response
             return response["result"]
         await verify(request)
-        rejected = client.post(f"/api/mcp/messages?token={token}", json={
+        rejected = client.post(f"/api/mcp?token={token}", json={
             "jsonrpc": "2.0", "id": 2, "method": "resources/read",
             "params": {"uri": "report://reference/../../SKILL.md"},
         }).json()
@@ -544,12 +544,12 @@ def test_live_lint_of_other_markdown_does_not_grant_export():
     client = TestClient(app)
     token = client.get("/api/session/init").json()["token"]
     client.post(f"/api/session/{token}/sync", json={"content": "Данных нет."})
-    response = client.post(f"/api/mcp/messages?token={token}", json={
+    response = client.post(f"/api/mcp?token={token}", json={
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": "lint_report", "arguments": {"markdown_content": "Выполнено исследование."}},
     }).json()["result"]
     assert response["isError"] is False
-    state = client.post(f"/api/mcp/messages?token={token}", json={
+    state = client.post(f"/api/mcp?token={token}", json={
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": "get_report_state", "arguments": {}},
     }).json()["result"]
@@ -561,7 +561,7 @@ def test_live_rollback_and_browser_mutations_invalidate_lint():
     token = client.get("/api/session/init").json()["token"]
 
     def call(name, **args):
-        result = client.post(f"/api/mcp/messages?token={token}", json={
+        result = client.post(f"/api/mcp?token={token}", json={
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": {"name": name, "arguments": args},
         }).json()["result"]
@@ -650,7 +650,7 @@ def test_snapshot_only_mutations_are_advertised_and_dispatched(transport):
         cursor = None
         while True:
             params = {} if cursor is None else {"cursor": cursor}
-            page = client.post(f"/api/mcp/messages?token={token}", json={
+            page = client.post(f"/api/mcp?token={token}", json={
                 "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": params,
             }).json()["result"]
             schemas.update({tool["name"]: tool["inputSchema"] for tool in page["tools"]})
@@ -805,7 +805,7 @@ def test_live_and_headless_share_the_common_tool_names(transport):
     if name == "live":
         from backend.app.engine.mcp_router import MCP_LIVE_TOOLS
         live_names = {tool["name"] for tool in MCP_LIVE_TOOLS}
-        capabilities = client.post(f"/api/mcp/messages?token={token}", json={
+        capabilities = client.post(f"/api/mcp?token={token}", json={
             "jsonrpc": "2.0", "id": 3, "method": "tools/call",
             "params": {"name": "get_capabilities", "arguments": {}},
         }).json()["result"]

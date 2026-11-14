@@ -961,25 +961,28 @@ export const App: React.FC = () => {
         reset = await resetReport(sessionToken);
         await clearStoredImages();
       });
-      if (!reset) throw new Error('Не удалось получить состояние нового отчёта');
-      const nextMeta = { ...DEFAULT_META, ...(reset.meta || {}) };
+      // The assignment happens inside the media queue callback, so control-flow
+      // analysis keeps `reset` narrowed to null here; assert the real shape.
+      const state = reset as Awaited<ReturnType<typeof resetReport>> | null;
+      if (!state) throw new Error('Не удалось получить состояние нового отчёта');
+      const nextMeta = { ...DEFAULT_META, ...(state.meta || {}) };
       sessionGenerationRef.current += 1;
-      imageRevisionRef.current = reset.image_revision;
+      imageRevisionRef.current = state.image_revision;
       acknowledgedRef.current = {
-        content: reset.content,
-        revision: reset.revision,
+        content: state.content,
+        revision: state.revision,
         meta: serializeMetadata(nextMeta),
-        metaRevision: reset.meta_revision,
+        metaRevision: state.meta_revision,
       };
       conflictRef.current = null;
       setSyncConflict(null);
       setSyncError(false);
       setFailedImageUploads([]);
       setLocalImageError(null);
-      contentRef.current = reset.content;
+      contentRef.current = state.content;
       metaRef.current = nextMeta;
       imagesRef.current = [];
-      setContent(reset.content);
+      setContent(state.content);
       setMeta(nextMeta);
       setImages([]);
       try {

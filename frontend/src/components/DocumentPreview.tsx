@@ -1236,7 +1236,7 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
               </div>
 
               {/* City/year is title text anchored to the page footer zone. */}
-              {meta.year !== null && meta.year !== undefined && meta.year !== '' && (
+              {meta.year !== null && meta.year !== undefined && (
                 <div className="absolute bottom-[57px] left-[85px] right-[43px] text-center text-[12px] font-serif">
                   <p>{formatTitleCity(meta.city)} {meta.year}</p>
                 </div>

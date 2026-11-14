@@ -17,7 +17,7 @@ export const McpModal: React.FC<McpModalProps> = ({
   onResetToken
 }) => {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [setupTab, setSetupTab] = useState<'agent_command' | 'direct_url' | 'cli' | 'json'>('agent_command');
+  const [setupTab, setSetupTab] = useState<'agent_command' | 'direct_url' | 'json'>('agent_command');
   const [activeJsonTab, setActiveJsonTab] = useState<'antigravity' | 'cursor' | 'claude'>('antigravity');
 
   if (!isOpen) return null;
@@ -38,8 +38,6 @@ export const McpModal: React.FC<McpModalProps> = ({
   const cursorConfig = JSON.stringify({ url: streamableHttpUrl }, null, 2);
 
   const claudeConfig = JSON.stringify({ type: "http", url: streamableHttpUrl }, null, 2);
-
-  const hermesConfigCommand = `hermes config set mcp_servers.report-live.url '${streamableHttpUrl}' && hermes config set mcp_servers.report-live.transport http`;
 
   const currentJsonConfig = activeJsonTab === 'antigravity' 
     ? antigravityConfig 
@@ -145,16 +143,6 @@ export const McpModal: React.FC<McpModalProps> = ({
                   Streamable HTTP URL
                 </button>
                 <button
-                  onClick={() => setSetupTab('cli')}
-                  className={`px-2 sm:px-2.5 py-1 rounded-md font-bold transition-all ${
-                    setupTab === 'cli'
-                      ? 'bg-purple-600 text-white shadow-sm'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  CLI (Hermes)
-                </button>
-                <button
                   onClick={() => setSetupTab('json')}
                   className={`px-2 py-1 rounded-md font-bold transition-all ${
                     setupTab === 'json'
@@ -214,30 +202,6 @@ export const McpModal: React.FC<McpModalProps> = ({
                   >
                     {copiedKey === 'url' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                     <span>{copiedKey === 'url' ? 'Скопировано' : 'Скопировать URL'}</span>
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Hermes CLI command. */}
-            {setupTab === 'cli' && (
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 space-y-2 animate-in fade-in duration-100">
-                <p className="text-[11px] text-slate-600">
-                  Команда для консоли Hermes Agent (задаёт URL и транспорт Streamable HTTP):
-                </p>
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                  <input
-                    type="text"
-                    readOnly
-                    value={hermesConfigCommand}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-[11px] text-slate-800 select-all"
-                  />
-                  <button
-                    onClick={() => copyToClipboard(hermesConfigCommand, 'hermes_cmd')}
-                    className="shrink-0 flex items-center justify-center gap-1.5 rounded-lg bg-slate-800 hover:bg-slate-900 text-white px-3.5 py-2 font-bold text-xs transition-all shadow-sm active:scale-95"
-                  >
-                    {copiedKey === 'hermes_cmd' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                    <span>{copiedKey === 'hermes_cmd' ? 'Скопировано' : 'Скопировать'}</span>
                   </button>
                 </div>
               </div>

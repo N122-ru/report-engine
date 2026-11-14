@@ -6,6 +6,7 @@ import { DocumentPreview } from './components/DocumentPreview';
 import { TableModal } from './components/TableModal';
 import { ExternalVerifyModal } from './components/ExternalVerifyModal';
 import { AiPromptModal } from './components/AiPromptModal';
+import { ImportDocxModal } from './components/ImportDocxModal';
 import { McpModal } from './components/McpModal';
 import { ReportGuideModal } from './components/ReportGuideModal';
 import { ReportMetadata } from './types';
@@ -233,6 +234,7 @@ export const App: React.FC = () => {
   const [isTableModalOpen, setIsTableModalOpen] = useState(false);
   const [isVerifyModalOpen, setIsVerifyModalOpen] = useState(false);
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
+  const [isImportDocxModalOpen, setIsImportDocxModalOpen] = useState(false);
   const [isMcpModalOpen, setIsMcpModalOpen] = useState(false);
   const [isGuideModalOpen, setIsGuideModalOpen] = useState(false);
   const [isSubjectModalOpen, setIsSubjectModalOpen] = useState(false);
@@ -1400,6 +1402,7 @@ export const App: React.FC = () => {
         onDownloadTitleOnly={handleDownloadTitleOnly}
         onOpenVerifyModal={() => setIsVerifyModalOpen(true)}
         onOpenAiModal={() => setIsAiModalOpen(true)}
+        onOpenImportDocx={() => setIsImportDocxModalOpen(true)}
         onOpenMcpModal={() => setIsMcpModalOpen(true)}
         onOpenGuide={() => setIsGuideModalOpen(true)}
         onExportJson={handleExportJson}
@@ -1694,11 +1697,18 @@ export const App: React.FC = () => {
           isOpen={isAiModalOpen}
           onClose={() => setIsAiModalOpen(false)}
           onApplyImport={handleApplyAiImport}
-          onImportDocx={handleImportDocx}
           meta={meta}
           onUpdateCustomInstructions={(val) => setMeta(prev => ({ ...prev, custom_instructions: val }))}
           onUpdatePromptLatex={(val) => setMeta(prev => ({ ...prev, prompt_latex: val }))}
           onUpdatePromptCodeBlocks={(val) => setMeta(prev => ({ ...prev, prompt_code_blocks: val }))}
+        />
+      )}
+
+      {isImportDocxModalOpen && (
+        <ImportDocxModal
+          isOpen={isImportDocxModalOpen}
+          onClose={() => setIsImportDocxModalOpen(false)}
+          onImportDocx={handleImportDocx}
         />
       )}
 

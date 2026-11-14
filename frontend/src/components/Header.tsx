@@ -14,6 +14,7 @@ interface HeaderProps {
   onDownloadTitleOnly: () => void;
   onOpenVerifyModal: () => void;
   onOpenAiModal: () => void;
+  onOpenImportDocx: () => void;
   onOpenMcpModal: () => void;
   onOpenGuide: () => void;
   onExportJson: () => void;
@@ -33,6 +34,7 @@ export const Header: React.FC<HeaderProps> = ({
   onDownloadTitleOnly,
   onOpenVerifyModal,
   onOpenAiModal,
+  onOpenImportDocx,
   onOpenMcpModal,
   onOpenGuide,
   onExportJson,
@@ -132,6 +134,17 @@ export const Header: React.FC<HeaderProps> = ({
                   className="hidden" 
                 />
               </label>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsFileMenuOpen(false);
+                  onOpenImportDocx();
+                }}
+                className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-slate-700 hover:bg-slate-100 transition-colors text-left font-medium"
+              >
+                <UploadCloud className="h-4 w-4 text-purple-600" />
+                <span>Импорт отчёта из DOCX</span>
+              </button>
               <label className="flex items-center gap-2 px-2.5 py-2 rounded-lg text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer font-medium">
                 <UploadCloud className="h-4 w-4 text-purple-600" />
                 <span>Импортировать профиль (.json)</span>
